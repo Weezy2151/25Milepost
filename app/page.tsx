@@ -18,110 +18,111 @@ type EventPick = {
   url: string;
   mapUrl: string;
   categories: string[];
+  days?: string[];
   note?: string;
   image?: string;
 };
 
 const events: EventPick[] = [
   {
-    id: "levitt-vibe-tonight",
+    id: "destination-dinosaur-today",
     section: "today",
-    day: "Tonight",
-    date: "Mon, Aug 10",
-    time: "5:30–8 PM",
-    title: "Levitt VIBE: Will Holton & Drea d’Nur",
-    venue: "Ralph C. Wilson Jr. Centennial Park",
+    day: "Today",
+    date: "Tue, Aug 11",
+    time: "10 AM–5 PM",
+    title: "Destination Dinosaur",
+    venue: "Buffalo Zoo",
     place: "Buffalo",
-    distance: 15,
+    distance: 17,
     description:
-      "Spread out by the lake for a free, all-ages funk and soul show with food trucks, lawn space and room for kids to move.",
-    cost: "Free",
-    source: "Visit Buffalo Niagara",
-    url: "https://visitbuffalo.com/event/levitt-vibe-music-series/",
+      "Walk a trail of life-size animatronic dinosaurs, dig for fossils and catch an educational dino show at noon or 2 PM.",
+    cost: "$25.95 adult · $19.95 child",
+    source: "Buffalo Zoo",
+    url: "https://buffalozoo.org/event/destination-dinosaur/2026-08-11/",
     mapUrl:
-      "https://www.google.com/maps/search/?api=1&query=Ralph+C+Wilson+Jr+Centennial+Park+Buffalo+NY",
-    categories: ["Free", "Outdoor", "Music"],
-    note: "Happening now · bring chairs or a blanket",
+      "https://www.google.com/maps/search/?api=1&query=Buffalo+Zoo+300+Parkside+Avenue+Buffalo+NY",
+    categories: ["Kids", "Educational", "Outdoor"],
+    note: "Included with zoo admission · final entry at 4 PM",
   },
   {
-    id: "tnt-river-grove",
+    id: "op-preschool-storytime",
     section: "today",
-    day: "Tonight",
-    date: "Mon, Aug 10",
-    time: "5–8:30 PM",
-    title: "TNT Acoustic Duo Under the Pavilion",
-    venue: "Buffalo River Grove",
-    place: "West Seneca",
-    distance: 10,
-    description:
-      "A rain-or-shine acoustic concert beneath a covered pavilion, with affordable food for sale and plenty of casual seating.",
-    cost: "Free admission",
-    source: "Step Out Buffalo",
-    url: "https://stepoutbuffalo.com/event/free-concert-live-music-by-the-tnt-acoustic-duo-at-the-buffalo-river-grove/",
-    mapUrl:
-      "https://www.google.com/maps/search/?api=1&query=Buffalo+River+Grove+2299+Clinton+Street+West+Seneca+NY",
-    categories: ["Free", "Music", "Food"],
-    note: "Food and cash bar available; no outside food",
-  },
-  {
-    id: "teen-game-night",
-    section: "today",
-    day: "Tonight",
-    date: "Mon, Aug 10",
-    time: "6–7 PM",
-    title: "Teen Game Night",
+    day: "Today",
+    date: "Tue, Aug 11",
+    time: "10 AM",
+    title: "Preschool Storytime",
     venue: "Orchard Park Public Library",
     place: "Orchard Park",
     distance: 1,
     description:
-      "Local teens can drop into an easygoing hour of board and card games without turning tonight into a long drive.",
-    cost: "Free · registration requested",
+      "Young readers and their caregivers can share stories and early-literacy activities without turning the morning into a road trip.",
+    cost: "Free · registration required",
     source: "Buffalo & Erie County Public Library",
     url: "https://www.buffalolib.org/orchard-park-public-library",
     mapUrl:
       "https://www.google.com/maps/search/?api=1&query=Orchard+Park+Public+Library+Orchard+Park+NY",
     categories: ["Free", "Kids", "Indoor"],
-    note: "Ages 13–17",
+    note: "Ages 3–5 · child attends with a caregiver",
   },
   {
-    id: "sheas-historic-tour",
+    id: "hamburg-pokemon-club",
     section: "today",
-    day: "Tonight",
-    date: "Mon, Aug 10",
-    time: "6 PM",
-    title: "Shea’s Centennial Historic Tour",
-    venue: "Shea’s Buffalo Theatre",
-    place: "Buffalo",
-    distance: 15,
+    day: "Today",
+    date: "Tue, Aug 11",
+    time: "4–6 PM",
+    title: "Pokémon Club",
+    venue: "Hamburg Public Library",
+    place: "Hamburg",
+    distance: 12,
     description:
-      "Step inside Buffalo’s gilded movie palace for a small-group look at its Tiffany-designed interior and century of show history.",
-    cost: "$25 per person",
-    source: "Shea’s Performing Arts Center",
-    url: "https://www.sheas.org/historic-tours/",
+      "Kids can make Pokémon crafts, trade cards or battle in unlimited format; the library has cards on hand for newcomers.",
+    cost: "Free library program",
+    source: "Buffalo & Erie County Public Library",
+    url: "https://www.buffalolib.org/locations-hours/hamburg-public-library",
     mapUrl:
-      "https://www.google.com/maps/search/?api=1&query=Sheas+Buffalo+Theatre+646+Main+Street+Buffalo+NY",
-    categories: ["Indoor", "Educational", "Unique"],
-    note: "Advance reservation required · only 20 spots",
+      "https://www.google.com/maps/search/?api=1&query=Hamburg+Public+Library+102+Buffalo+Street+Hamburg+NY",
+    categories: ["Free", "Kids", "Indoor"],
+    note: "Ages 6–12 · caregiver required for ages 8 and under",
   },
   {
-    id: "delaware-flow-jam",
+    id: "family-fort-night",
+    section: "today",
+    day: "Today",
+    date: "Tue, Aug 11",
+    time: "5:30 PM",
+    title: "Family Fort Night",
+    venue: "West Seneca Public Library",
+    place: "West Seneca",
+    distance: 9,
+    description:
+      "Bring the crew indoors to build a blanket fort together in the library for a wonderfully low-tech family evening.",
+    cost: "Free · registration required",
+    source: "Buffalo & Erie County Public Library",
+    url: "https://www.buffalolib.org/locations-hours/west-seneca-public-library",
+    mapUrl:
+      "https://www.google.com/maps/search/?api=1&query=West+Seneca+Public+Library+1300+Union+Road+West+Seneca+NY",
+    categories: ["Free", "Kids", "Indoor", "Unique"],
+    note: "Best for ages 2+ · space is limited",
+  },
+  {
+    id: "tangled-in-the-park",
     section: "today",
     day: "Tonight",
-    date: "Mon, Aug 10",
-    time: "7–10 PM",
-    title: "Delaware Park Flow Jam",
-    venue: "Delaware Park at Hoyt Lake",
-    place: "Buffalo",
-    distance: 16,
+    date: "Tue, Aug 11",
+    time: "8:30–11 PM",
+    title: "Movie in the Park: Tangled",
+    venue: "Veterans Memorial Park",
+    place: "West Seneca",
+    distance: 9,
     description:
-      "Catch local performers, live music and a public fire-arts showcase beside Hoyt Lake for a one-of-a-kind summer evening.",
+      "Bring blankets and lawn chairs for a free, all-ages showing of Disney’s lantern-lit adventure under the stars.",
     cost: "Free",
-    source: "City of Buffalo",
-    url: "https://www.buffalony.gov/Calendar.aspx?EID=6245",
+    source: "Town of West Seneca Recreation",
+    url: "https://westsenecany.myrec.com/info/calendar/list.aspx?AreaID=0&FacilityID=14711",
     mapUrl:
-      "https://www.google.com/maps/search/?api=1&query=Hoyt+Lake+Delaware+Park+Buffalo+NY",
-    categories: ["Free", "Outdoor", "Music", "Unique"],
-    note: "Fire performance · close supervision recommended",
+      "https://www.google.com/maps/search/?api=1&query=Veterans+Memorial+Park+1250+Union+Road+West+Seneca+NY",
+    categories: ["Free", "Kids", "Outdoor", "Movie"],
+    note: "Starts at dusk · weather dependent · rain date Aug 18",
   },
   {
     id: "erie-county-fair",
@@ -135,34 +136,76 @@ const events: EventPick[] = [
     distance: 6,
     description:
       "The region’s giant summer fair packs rides, 4-H animals, agricultural exhibits, free shows and gloriously over-the-top fair food into one day out.",
-    cost: "$19 · $16 early bird",
+    cost: "$19 adult · kids 12 & under free",
     source: "Erie County Fair",
     url: "https://www.ecfair.org/p/info/admissionparking",
     mapUrl:
       "https://www.google.com/maps/search/?api=1&query=Hamburg+Fairgrounds+5600+McKinley+Parkway+Hamburg+NY",
     categories: ["Festival", "Kids", "Food", "Outdoor"],
-    note: "Opening day: free with 4+ nonperishable food items",
+    days: ["Wed", "Thu", "Fri", "Sat", "Sun", "Mon", "Tue"],
+    note: "$16 from 11 AM–1 PM · opening day free with 4+ canned goods",
     image: "/events/erie-county-fair.jpg",
   },
   {
-    id: "destination-dinosaur",
+    id: "op-reptiles-world",
     section: "week",
-    day: "Tue",
-    date: "Daily through Mon, Aug 17",
-    time: "10 AM–5 PM",
-    title: "Destination Dinosaur",
-    venue: "Buffalo Zoo",
+    day: "Wed",
+    date: "Wed, Aug 12",
+    time: "2 PM",
+    title: "Reptiles Around the World",
+    venue: "Orchard Park Public Library",
+    place: "Orchard Park",
+    distance: 1,
+    description:
+      "Repco Wildlife Encounters brings live reptiles to the library for a close-to-home, all-ages animal program.",
+    cost: "Free · registration required",
+    source: "Buffalo & Erie County Public Library",
+    url: "https://www.buffalolib.org/orchard-park-public-library",
+    mapUrl:
+      "https://www.google.com/maps/search/?api=1&query=Orchard+Park+Public+Library+Orchard+Park+NY",
+    categories: ["Free", "Kids", "Educational", "Indoor"],
+    note: "All ages · reserve a spot with the library",
+  },
+  {
+    id: "shakespeare-park",
+    section: "week",
+    day: "Wed",
+    date: "Wed, Aug 12–Sun, Aug 16",
+    time: "7 PM",
+    title: "The Taming of the Shrew",
+    venue: "Shakespeare Hill, Delaware Park",
     place: "Buffalo",
     distance: 16,
     description:
-      "Walk among life-size animatronic dinosaurs, try the fossil dig and catch an educational dino show at noon or 2 PM.",
-    cost: "$25.95 adult · $19.95 child",
-    source: "Buffalo Zoo",
-    url: "https://buffalozoo.org/event/destination-dinosaur/2026-08-11/",
+      "Pack a picnic for the closing week of Buffalo’s beloved free Shakespeare tradition under the trees beside Hoyt Lake.",
+    cost: "Free · non-ticketed",
+    source: "Shakespeare in Delaware Park",
+    url: "https://shakespeareindelawarepark.org/mainstage/",
     mapUrl:
-      "https://www.google.com/maps/search/?api=1&query=Buffalo+Zoo+300+Parkside+Avenue+Buffalo+NY",
-    categories: ["Kids", "Educational", "Outdoor"],
-    note: "Exhibit included with zoo admission",
+      "https://www.google.com/maps/search/?api=1&query=Shakespeare+Hill+Delaware+Park+Buffalo+NY",
+    categories: ["Free", "Outdoor", "Theater"],
+    days: ["Wed", "Thu", "Fri", "Sat", "Sun"],
+    note: "Bring a blanket or low chair · weather dependent",
+  },
+  {
+    id: "canalside-kids-tour",
+    section: "week",
+    day: "Fri",
+    date: "Fri, Aug 14",
+    time: "10:30 AM",
+    title: "Canalside for Kids Walking Tour",
+    venue: "Waterway of Change Museum",
+    place: "Buffalo",
+    distance: 19,
+    description:
+      "A guide turns the waterfront’s history into a one-mile, stroller-friendly adventure designed especially for kids ages 5–10.",
+    cost: "Free · registration required",
+    source: "Explore Buffalo",
+    url: "https://explorebuffalo.org/waterfront/canalside-for-kids/",
+    mapUrl:
+      "https://www.google.com/maps/search/?api=1&query=Longshed+Building+Canalside+Buffalo+NY",
+    categories: ["Free", "Kids", "Educational", "Outdoor"],
+    note: "45–60 minutes · limited to 15 guests",
   },
   {
     id: "wild-robot-movie",
@@ -173,7 +216,7 @@ const events: EventPick[] = [
     title: "Family Movie Night: The Wild Robot",
     venue: "Prospect Park",
     place: "Buffalo",
-    distance: 16,
+    distance: 17,
     description:
       "Bring blankets and chairs for a free outdoor showing of the tender animated adventure, with light refreshments before the film.",
     cost: "Free",
@@ -185,26 +228,6 @@ const events: EventPick[] = [
     note: "Weather dependent · refreshments first come, first served",
   },
   {
-    id: "shakespeare-park",
-    section: "week",
-    day: "Thu",
-    date: "Thu, Aug 13–Sun, Aug 16",
-    time: "7 PM",
-    title: "The Taming of the Shrew",
-    venue: "Shakespeare Hill, Delaware Park",
-    place: "Buffalo",
-    distance: 16,
-    description:
-      "Pack a picnic for the closing weekend of Buffalo’s beloved free Shakespeare tradition under the trees beside Hoyt Lake.",
-    cost: "Free · non-ticketed",
-    source: "Shakespeare in Delaware Park",
-    url: "https://shakespeareindelawarepark.org/season/2026-51st-season/",
-    mapUrl:
-      "https://www.google.com/maps/search/?api=1&query=Shakespeare+Hill+Delaware+Park+Buffalo+NY",
-    categories: ["Free", "Outdoor", "Theater"],
-    note: "Bring a blanket or low chair · weather dependent",
-  },
-  {
     id: "festival-india",
     section: "week",
     day: "Sat",
@@ -213,7 +236,7 @@ const events: EventPick[] = [
     title: "Festival of India",
     venue: "Canalside",
     place: "Buffalo",
-    distance: 16,
+    distance: 19,
     description:
       "A bright waterfront celebration of Indian dance, music, food, art and community designed to welcome every age.",
     cost: "Free",
@@ -234,7 +257,7 @@ const events: EventPick[] = [
     title: "Puerto Rican & Hispanic Day Parade",
     venue: "Niagara Street to Niagara Square",
     place: "Buffalo",
-    distance: 16,
+    distance: 18,
     description:
       "Cheer on a colorful cultural parade down Avenida San Juan, then stay for the free community concert in Niagara Square.",
     cost: "Free",
@@ -246,26 +269,6 @@ const events: EventPick[] = [
     note: "Parade at noon · concert follows",
   },
   {
-    id: "elmwood-market",
-    section: "week",
-    day: "Sat",
-    date: "Sat, Aug 15",
-    time: "8 AM–1 PM",
-    title: "Elmwood Village Farmers Market",
-    venue: "Bidwell Parkway at Elmwood",
-    place: "Buffalo",
-    distance: 16,
-    description:
-      "Browse a producer-only market full of local fruit, vegetables, baked goods and easy breakfast provisions beneath the parkway trees.",
-    cost: "Free entry",
-    source: "Elmwood Village Farmers Market",
-    url: "https://www.elmwoodmarket.org/",
-    mapUrl:
-      "https://www.google.com/maps/search/?api=1&query=Bidwell+Parkway+Elmwood+Avenue+Buffalo+NY",
-    categories: ["Free", "Market", "Food", "Outdoor"],
-    note: "Pay vendors for purchases",
-  },
-  {
     id: "south-buffalo-market",
     section: "week",
     day: "Sun",
@@ -274,7 +277,7 @@ const events: EventPick[] = [
     title: "South Buffalo Farmers Market",
     venue: "Cazenovia Park Casino lawn",
     place: "Buffalo",
-    distance: 8,
+    distance: 12,
     description:
       "A close-to-home Sunday market with local growers and makers, live music, free yoga and neighborhood bike rides.",
     cost: "Free entry",
@@ -305,10 +308,30 @@ const events: EventPick[] = [
     categories: ["Free", "Music", "Outdoor"],
     note: "Bring chairs or a blanket",
   },
+  {
+    id: "au-some-morning",
+    section: "week",
+    day: "Tue",
+    date: "Tue, Aug 18",
+    time: "9:30–11:30 AM",
+    title: "Au-Some Morning Edition",
+    venue: "Explore & More Children’s Museum",
+    place: "Buffalo",
+    distance: 19,
+    description:
+      "A sensory-friendly museum morning welcomes autistic children, friends and families for calm play, art, tinkering and therapy animals.",
+    cost: "Free · registration required",
+    source: "Explore & More",
+    url: "https://exploreandmore.org/event/au-some-evening-august-2026/",
+    mapUrl:
+      "https://www.google.com/maps/search/?api=1&query=Explore+and+More+130+Main+Street+Buffalo+NY",
+    categories: ["Free", "Kids", "Indoor", "Educational"],
+    note: "Limited space · designed for sensory needs",
+  },
 ];
 
 const filters = ["All", "Free", "Kids", "Outdoor", "Food", "Music", "Market"];
-const days = ["All week", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Mon"];
+const days = ["All week", "Wed", "Thu", "Fri", "Sat", "Sun", "Mon", "Tue"];
 
 function weatherLabel(code: number) {
   if (code === 0) return "Clear";
@@ -343,8 +366,14 @@ export default function Home() {
   const [weather, setWeather] = useState("Checking the Orchard Park sky…");
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("twenty-five-mile-post-clippings");
-    if (stored) setSaved(JSON.parse(stored));
+    const restoreClippings = window.setTimeout(() => {
+      try {
+        const stored = window.localStorage.getItem("twenty-five-mile-post-clippings");
+        if (stored) setSaved(JSON.parse(stored));
+      } catch {
+        window.localStorage.removeItem("twenty-five-mile-post-clippings");
+      }
+    }, 0);
 
     fetch(
       "https://api.open-meteo.com/v1/forecast?latitude=42.767&longitude=-78.744&current=temperature_2m,apparent_temperature,weather_code&daily=temperature_2m_max,precipitation_probability_max&temperature_unit=fahrenheit&timezone=America%2FNew_York",
@@ -357,6 +386,8 @@ export default function Home() {
         setWeather(`${weatherLabel(data.current.weather_code)} · ${current}° now · ${high}° high · ${rain}% rain`);
       })
       .catch(() => setWeather("Forecast unavailable · check before outdoor plans"));
+
+    return () => window.clearTimeout(restoreClippings);
   }, []);
 
   const visibleWeek = useMemo(
@@ -366,7 +397,7 @@ export default function Home() {
         if (event.distance > maxDistance) return false;
         if (showClippings && !saved.includes(event.id)) return false;
         if (activeFilter !== "All" && !event.categories.includes(activeFilter)) return false;
-        if (activeDay !== "All week" && event.day !== activeDay) return false;
+        if (activeDay !== "All week" && !(event.days ?? [event.day]).includes(activeDay)) return false;
         return true;
       }),
     [activeDay, activeFilter, maxDistance, saved, showClippings],
@@ -409,7 +440,7 @@ export default function Home() {
         <header className="masthead">
           <div className="masthead-top">
             <span>Family field notes for Buffalo’s Southtowns</span>
-            <span>Late edition · Monday, August 10, 2026</span>
+            <span>Morning edition · Tuesday, August 11, 2026</span>
             <button onClick={shareEdition} className="text-button" aria-label="Share this edition">
               Share edition ↗
             </button>
@@ -428,7 +459,7 @@ export default function Home() {
             <div className="weather-box">
               <span>Today’s outlook</span>
               <strong>{weather}</strong>
-              <small>Live forecast · plans verified 5:35 PM EDT</small>
+              <small>Live forecast · listings verified 7:00 AM EDT</small>
             </div>
           </div>
           <nav className="section-nav" aria-label="Edition sections">
@@ -442,7 +473,7 @@ export default function Home() {
         <section className="ticker" aria-label="Edition summary">
           <span className="ticker-label">Just in</span>
           <p>
-            Five ways out tonight <i>◆</i> Erie County Fair opens Wednesday <i>◆</i> Nine strong picks through Monday
+            Five family plans today <i>◆</i> Erie County Fair opens Wednesday <i>◆</i> Ten vetted picks through Tuesday
           </p>
         </section>
 
@@ -456,7 +487,7 @@ export default function Home() {
               <span className="photo-credit">File photo · Erie County Fair midway</span>
             </div>
             <div className="lead-copy">
-              <p className="section-kicker">Top pick · Wednesday</p>
+              <p className="section-kicker">Top pick · opens Wednesday</p>
               <h2>The fair is the family outing that earns a full day.</h2>
               <p className="drop-cap">
                 Six miles from home, the Erie County Fair offers the rare all-ages mix: little kids can meet farm animals, bigger kids get the midway, and adults can make a highly defensible lunch out of fried dough.
@@ -464,7 +495,7 @@ export default function Home() {
               <div className="lead-facts">
                 <span><b>When</b> Aug 12–23, 11 AM–10 PM</span>
                 <span><b>Where</b> Hamburg Fairgrounds</span>
-                <span><b>Cost</b> $19; opening-day food drive can make admission free</span>
+                <span><b>Cost</b> $19 adult; kids 12 and under free</span>
               </div>
               <div className="lead-actions">
                 <a href="https://www.ecfair.org/p/info/admissionparking" target="_blank" rel="noreferrer" className="primary-button">
@@ -479,14 +510,14 @@ export default function Home() {
 
           <aside className="editor-note">
             <p className="section-kicker">From the family desk</p>
-            <h2>Tonight isn’t over yet.</h2>
+            <h2>Dinosaurs first. A movie after dark.</h2>
             <p>
-              This late edition only includes timed events that were still happening or had not started when we checked. The strongest move is the free Levitt VIBE concert by the lake; the library is the lowest-effort play for teens.
+              Today’s short list runs from a 10 AM storytime to an 8:30 PM movie. Three picks are within 12 miles, and four are free or standard library programs.
             </p>
             <div className="mini-ranking">
-              <div><span>01</span><p><b>Best free plan</b> Levitt VIBE at Ralph Wilson Park</p></div>
-              <div><span>02</span><p><b>Closest plan</b> Teen Game Night, one mile away</p></div>
-              <div><span>03</span><p><b>Most unusual</b> Fire arts beside Hoyt Lake</p></div>
+              <div><span>01</span><p><b>Best all-day plan</b> Destination Dinosaur at the zoo</p></div>
+              <div><span>02</span><p><b>Closest plan</b> Preschool Storytime, one mile away</p></div>
+              <div><span>03</span><p><b>Best late plan</b> <i>Tangled</i> under the stars</p></div>
             </div>
             <button onClick={surpriseMe} className="surprise-button">✦ Let the presses pick</button>
             <p className="weather-caution">Times, weather and availability can change. Open the source before leaving.</p>
@@ -496,10 +527,10 @@ export default function Home() {
         <section id="today" className="today-section">
           <div className="section-heading">
             <div>
-              <p className="section-kicker">Monday’s late edition</p>
+              <p className="section-kicker">Tuesday’s morning edition</p>
               <h2>Today</h2>
             </div>
-            <p>The best 5 still within reach tonight, ordered from easiest to most adventurous.</p>
+            <p>The best 5 happening today, from first story to final credits.</p>
           </div>
 
           <div className="today-grid">
@@ -536,7 +567,7 @@ export default function Home() {
         <section id="this-week" className="week-section">
           <div className="section-heading week-heading">
             <div>
-              <p className="section-kicker">Tuesday, Aug 11 → Monday, Aug 17</p>
+              <p className="section-kicker">Wednesday, Aug 12 → Tuesday, Aug 18</p>
               <h2>This week</h2>
             </div>
             <p>Filter the family calendar. Your clippings stay on this device.</p>
@@ -667,7 +698,7 @@ export default function Home() {
           </div>
           <div className="source-roll">
             <b>Sources in this issue</b>
-            <p>Erie County Fair · Buffalo Zoo · Buffalo Waterfront · City of Buffalo · Buffalo Olmsted Parks · local libraries · Step Out Buffalo · Shea’s · Visit Buffalo Niagara</p>
+            <p>Erie County Fair · Buffalo Zoo · Buffalo Waterfront · Buffalo Olmsted Parks · local libraries · West Seneca Recreation · Explore Buffalo · Shakespeare in Delaware Park · Visit Buffalo Niagara · Explore & More</p>
           </div>
         </footer>
       </div>
