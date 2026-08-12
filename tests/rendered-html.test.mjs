@@ -30,8 +30,9 @@ test("server-renders the dynamic events finder with a last-known snapshot", asyn
 
   const html = await response.text();
   assert.match(html, /The 25-Mile Post/);
-  assert.match(html, /Reptiles Around the World/);
-  assert.match(html, /Fossil Frenzy Play Cafe/);
+  assert.match(html, /Cruise Night at the Depot/);
+  assert.match(html, /East Aurora Farmers Market/);
+  assert.doesNotMatch(html, /Fossil Frenzy Play Cafe/);
   assert.match(html, /Erie County Fair/);
   assert.doesNotMatch(html, /Au-Some Morning Edition/);
   assert.match(html, /Loading this morning’s edition/);
@@ -43,7 +44,7 @@ test("server-renders the dynamic events finder with a last-known snapshot", asyn
   assert.match(html, /Hamburg Sun/);
   assert.doesNotMatch(html, /Tuesday, August 11, 2026|Movie in the Park: Tangled|Teen Game Night|Delaware Park Flow Jam/);
 
-  assert.equal((html.match(/<article class="event-card/g) ?? []).length, 11);
+  assert.equal((html.match(/<article class="event-card/g) ?? []).length, 8);
 });
 
 test("keeps live refresh, interactions, source adapters and hosting metadata", async () => {
@@ -57,7 +58,7 @@ test("keeps live refresh, interactions, source adapters and hosting metadata", a
   assert.match(page, /twenty-five-mile-post-clippings/);
   assert.match(page, /api\.open-meteo\.com/);
   assert.match(page, /navigator\.share/);
-  assert.match(page, /fetch\("\/api\/events"/);
+  assert.match(page, /fetch\("\/api\/events\?edition=balanced-v2"/);
   assert.doesNotMatch(page, /setInterval/);
   assert.match(page, /refreshed each morning/);
   assert.match(page, /What sounds good/);
