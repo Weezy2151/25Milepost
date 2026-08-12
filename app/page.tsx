@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type Area = "southtowns" | "city";
 type View = "southtowns" | "city" | "all";
@@ -11,6 +11,7 @@ type EventPick = {
   town: string;
   day: string;
   date: string;
+  dateKey?: string;
   time: string;
   title: string;
   venue: string;
@@ -26,7 +27,7 @@ type EventPick = {
   today?: boolean;
 };
 
-const events: EventPick[] = [
+const fallbackEvents: EventPick[] = [
   { id: "erie-fair", area: "southtowns", town: "Hamburg", day: "TODAY", date: "Wed, Aug 12", time: "11 AM–10 PM · midway noon–11", title: "Erie County Fair · Opening Day", venue: "Hamburg Fairgrounds", distance: 6, description: "Rides, farm animals, 4-H exhibits, food and opening-day community spirit make this the Southtowns’ biggest family outing.", cost: "Free with 4+ canned goods · otherwise $19 adult", source: "Erie County Fair", url: "https://www.ecfair.org/p/info/admissionparking", mapUrl: "https://www.google.com/maps/search/?api=1&query=Hamburg+Fairgrounds+5600+McKinley+Parkway+Hamburg+NY", tags: ["Fair", "Kids", "Food"], accent: "coral", image: "/events/erie-county-fair.jpg", today: true },
   { id: "op-reptiles", area: "southtowns", town: "Orchard Park", day: "TODAY", date: "Wed, Aug 12", time: "2 PM", title: "Reptiles Around the World", venue: "Orchard Park Public Library", distance: 1, description: "Repco Wildlife Encounters brings live reptiles to the library for a close-to-home, all-ages animal program.", cost: "Free · registration required", source: "B&ECPL", url: "https://www.buffalolib.org/orchard-park-public-library", mapUrl: "https://www.google.com/maps/search/?api=1&query=Orchard+Park+Public+Library+Orchard+Park+NY", tags: ["Animals", "Kids", "Indoor"], accent: "mint", today: true },
   { id: "elma-fossils", area: "southtowns", town: "Elma", day: "TODAY", date: "Wed, Aug 12", time: "2–3 PM", title: "Fossil Frenzy Play Cafe", venue: "Elma Public Library", distance: 10, description: "Handle fossils and explore a digital microscope in a hands-on, all-ages library play session.", cost: "Free · no registration", source: "B&ECPL", url: "https://www.buffalolib.org/locations-hours/elma-public-library", mapUrl: "https://www.google.com/maps/search/?api=1&query=Elma+Public+Library+Elma+NY", tags: ["Science", "Kids", "Drop-in"], accent: "sky", today: true },
@@ -47,7 +48,7 @@ const events: EventPick[] = [
   { id: "au-some", area: "city", town: "Buffalo", day: "TUE", date: "Tue, Aug 18", time: "9:30–11:30 AM", title: "Au-Some Morning Edition", venue: "Explore & More Children’s Museum", distance: 19, description: "A sensory-friendly museum morning welcomes autistic children, friends and families for calm play, art and tinkering.", cost: "Free · registration required", source: "Explore & More", url: "https://exploreandmore.org/education/au-some-evenings/", mapUrl: "https://www.google.com/maps/search/?api=1&query=Explore+and+More+130+Main+Street+Buffalo+NY", tags: ["Sensory-friendly", "Museum", "Kids"], accent: "mint" },
 ];
 
-const townFilters = ["All towns", "Orchard Park", "Hamburg", "Lakeshore", "West Seneca", "Eden", "Elma", "Boston", "South Buffalo"];
+const preferredTowns = ["Orchard Park", "Hamburg", "Lakeshore", "West Seneca", "Eden", "Elma", "Boston", "South Buffalo"];
 
 function weatherLabel(code: number) {
   if (code === 0) return "Clear";
@@ -78,6 +79,7 @@ function EventCard({ event, saved, onToggle }: { event: EventPick; saved: string
 }
 
 export default function Home() {
+  const [events, setEvents] = useState<EventPick[]>(fallbackEvents);
   const [view, setView] = useState<View>("southtowns");
   const [town, setTown] = useState("All towns");
   const [query, setQuery] = useState("");
@@ -93,9 +95,31 @@ export default function Home() {
   const [showSaved, setShowSaved] = useState(false);
   const [weather, setWeather] = useState("Checking the Orchard Park sky…");
   const [notice, setNotice] = useState("");
+  const [updatedAt, setUpdatedAt] = useState("");
+  const [refreshing, setRefreshing] = useState(true);
+
+  const refreshEvents = async () => {
+    setRefreshing(true);
+    try {
+      const response = await fetch("/api/events", { cache: "no-store" });
+      if (!response.ok) throw new Error("refresh failed");
+      const data = await response.json();
+      if (Array.isArray(data.events) && data.events.length) {
+        setEvents(data.events);
+        setUpdatedAt(data.updatedAt);
+      }
+    } catch {
+      setNotice("A source refresh failed; showing the last verified snapshot.");
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
+    const initialRefresh = window.setTimeout(() => void refreshEvents(), 0);
+    const refreshTimer = window.setInterval(() => void refreshEvents(), 5 * 60 * 1000);
     fetch("https://api.open-meteo.com/v1/forecast?latitude=42.767&longitude=-78.744&current=temperature_2m,weather_code&daily=temperature_2m_max,precipitation_probability_max&temperature_unit=fahrenheit&timezone=America%2FNew_York").then((response) => response.json()).then((data) => setWeather(`${weatherLabel(data.current.weather_code)} · ${Math.round(data.current.temperature_2m)}° now · ${Math.round(data.daily.temperature_2m_max[0])}° high · ${data.daily.precipitation_probability_max[0]}% rain`)).catch(() => setWeather("Forecast unavailable · check before outdoor plans"));
+    return () => { window.clearTimeout(initialRefresh); window.clearInterval(refreshTimer); };
   }, []);
 
   const matches = (event: EventPick) => {
@@ -104,8 +128,9 @@ export default function Home() {
     const text = `${event.title} ${event.description} ${event.venue} ${event.town} ${event.tags.join(" ")}`.toLowerCase();
     return inView && inTown && (!query || text.includes(query.toLowerCase())) && (!showSaved || saved.includes(event.id));
   };
-  const today = useMemo(() => events.filter((event) => event.today && matches(event)), [view, town, query, showSaved, saved]);
-  const upcoming = useMemo(() => events.filter((event) => !event.today && matches(event)), [view, town, query, showSaved, saved]);
+  const today = events.filter((event) => event.today && matches(event));
+  const upcoming = events.filter((event) => !event.today && matches(event));
+  const townFilters = ["All towns", ...Array.from(new Set([...preferredTowns, ...events.map((event) => event.town)]))];
 
   const toggleSaved = (id: string) => { const next = saved.includes(id) ? saved.filter((item) => item !== id) : [...saved, id]; setSaved(next); window.localStorage.setItem("twenty-five-mile-post-clippings", JSON.stringify(next)); setNotice(saved.includes(id) ? "Removed from saved plans." : "Saved for later on this device."); };
   const share = async () => { try { if (navigator.share) await navigator.share({ title: "The 25-Mile Post", text: "Family things to do around Orchard Park and the Southtowns", url: window.location.href }); else { await navigator.clipboard.writeText(window.location.href); setNotice("Link copied."); } } catch { setNotice("Sharing cancelled."); } };
@@ -114,24 +139,21 @@ export default function Home() {
     <main>
       <div className="site-shell">
         <header className="app-header">
-          <div className="header-top"><span>ORCHARD PARK · SOUTHtowns · WESTERN NEW YORK</span><span>Refreshed Wednesday, August 12, 2026</span><button onClick={share}>Share ↗</button></div>
-          <div className="header-main"><div><p className="eyebrow">A visual family event guide</p><h1>The 25-Mile Post</h1><p className="header-deck">Find something good to do — close to home, clearly explained.</p></div><div className="weather-card"><span>Live Orchard Park weather</span><strong>{weather}</strong><small>Listings checked against town calendars, flyers, libraries and local reporting.</small></div></div>
-          <nav className="main-nav"><a href="#today">Today</a><a href="#upcoming">Next 7 days</a><a href="#sources">Where we look</a></nav>
+          <div className="header-top"><span>ORCHARD PARK · SOUTHTOWNS · WESTERN NEW YORK</span><span>{refreshing ? "Refreshing local calendars…" : `${events.length} live events · updates every 5 minutes`}</span><button onClick={share}>Share ↗</button></div>
+          <div className="header-main"><div><p className="eyebrow">Things to do near Orchard Park</p><h1>The 25-Mile Post</h1></div><div className="weather-card"><span>Live Orchard Park weather</span><strong>{weather}</strong><small>{updatedAt ? `Events refreshed ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Loading live events…"}</small></div></div>
         </header>
-
-        <section className="hero-panel"><div><span className="hero-label">Southtowns first</span><h2>Make a plan without digging through ten calendars.</h2><p>Browse real events in Orchard Park, Hamburg, Lakeshore, West Seneca, Eden, Elma, Boston and nearby communities. Every card includes the time, place, distance, cost and the original listing.</p></div><div className="hero-stats"><div><b>{events.filter((event) => event.area === "southtowns").length}</b><span>Southtowns picks</span></div><div><b>{events.filter((event) => event.area === "city").length}</b><span>Buffalo picks</span></div><div><b>25</b><span>mile radius</span></div></div></section>
 
         <section className="browse-bar" aria-label="Event browsing controls">
           <div className="view-tabs"><button className={view === "southtowns" ? "active" : ""} onClick={() => setView("southtowns")}>Southtowns</button><button className={view === "city" ? "active" : ""} onClick={() => setView("city")}>Buffalo city</button><button className={view === "all" ? "active" : ""} onClick={() => setView("all")}>All nearby</button></div>
           <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search events, towns or activities" aria-label="Search events" /></label>
-          <button className={showSaved ? "saved-filter active" : "saved-filter"} onClick={() => setShowSaved(!showSaved)}>Saved ({saved.length})</button>
+          <button className={showSaved ? "saved-filter active" : "saved-filter"} onClick={() => setShowSaved(!showSaved)}>Saved ({saved.length})</button><button className="refresh-button" onClick={() => void refreshEvents()} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh now"}</button>
         </section>
 
         <div className="town-filter" aria-label="Filter by town"><span>Filter by town</span>{townFilters.map((filter) => <button key={filter} className={town === filter ? "active" : ""} onClick={() => setTown(filter)}>{filter}</button>)}</div>
 
-        <section id="today" className="events-section"><div className="section-title"><div><span className="eyebrow">Start here</span><h2>Today</h2></div><p>{today.length} plans showing · sorted for local families</p></div>{today.length ? <div className="event-grid">{today.map((event) => <EventCard key={event.id} event={event} saved={saved} onToggle={toggleSaved} />)}</div> : <div className="empty-panel">No matching events. Try “All nearby,” another town, or clear your search.</div>}</section>
+        <section id="today" className="events-section"><div className="section-title"><div><span className="eyebrow">{view === "southtowns" ? "Southtowns first" : view === "city" ? "Buffalo city" : "Within 25 miles"}</span><h2>Today</h2></div><p>{today.length} events</p></div>{today.length ? <div className="event-grid">{today.map((event) => <EventCard key={event.id} event={event} saved={saved} onToggle={toggleSaved} />)}</div> : <div className="empty-panel">No matching events. Try “All nearby,” another town, or clear your search.</div>}</section>
 
-        <section id="upcoming" className="events-section upcoming-section"><div className="section-title"><div><span className="eyebrow">Plan ahead</span><h2>Next 7 days</h2></div><p>{upcoming.length} more events through Wednesday, Aug 19</p></div>{upcoming.length ? <div className="event-grid">{upcoming.map((event) => <EventCard key={event.id} event={event} saved={saved} onToggle={toggleSaved} />)}</div> : <div className="empty-panel">No matching events for this view.</div>}</section>
+        <section id="upcoming" className="events-section upcoming-section"><div className="section-title"><div><span className="eyebrow">Browse by time, town or activity</span><h2>Next 7 days</h2></div><p>{upcoming.length} events</p></div>{upcoming.length ? <div className="event-grid">{upcoming.map((event) => <EventCard key={event.id} event={event} saved={saved} onToggle={toggleSaved} />)}</div> : <div className="empty-panel">No matching events for this view.</div>}</section>
 
         <section id="sources" className="source-board"><div className="section-title"><div><span className="eyebrow">Our reporting desk</span><h2>Where we look</h2></div><p>Town flyers and local reporting are part of the event search, not an afterthought.</p></div><div className="source-grid"><div><h3>Town & village calendars</h3><a href="https://www.orchardparkny.gov/events/">Town of Orchard Park ↗</a><a href="https://orchardparkvillageny.gov/village-events/">Village of Orchard Park ↗</a><a href="https://www.townofhamburgny.gov/386/Calendar-of-Events">Town of Hamburg ↗</a><a href="https://villageofhamburgny.gov/events">Village of Hamburg ↗</a><a href="https://www.westseneca.gov/calendar.aspx">West Seneca ↗</a><a href="https://edenny.gov/news/">Eden ↗</a><a href="https://www.elmanewyork.gov/">Elma ↗</a><a href="https://www.bostonny.gov/events">Boston ↗</a><a href="https://townofevansny.gov/">Evans ↗</a></div><div><h3>Flyers, libraries & community desks</h3><a href="https://www.buffalolib.org/">Buffalo & Erie County Public Library ↗</a><a href="https://everythingop.com/about-everythingop/">EverythingOP ↗</a><a href="https://orchardparkchamber.org/">Orchard Park Chamber ↗</a><a href="https://southtownsregionalchamber.org/news-events/">Southtowns Regional Chamber ↗</a><a href="https://www.southbuffalo.org/calendar">South Buffalo Community Association ↗</a><a href="https://www.wnyfamilymagazine.com/search/event/calendar-of-events/index.html">WNY Family Magazine ↗</a><a href="https://stepoutbuffalo.com/all-events/">Step Out Buffalo ↗</a></div><div><h3>Local papers & regional guides</h3><a href="https://www.orchardparkbee.com/">Orchard Park Bee ↗</a><a href="https://www.sun-news.com/">Hamburg Sun ↗</a><a href="https://westseneca.org/members/west-seneca-bee-2/">West Seneca Bee ↗</a><a href="https://www.buffalonews.com/">The Buffalo News ↗</a><a href="https://visitbuffalo.com/events/">Visit Buffalo Niagara ↗</a><a href="https://www3.erie.gov/parks/calendar">Erie County Parks ↗</a></div></div></section>
 

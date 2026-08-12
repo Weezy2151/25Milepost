@@ -23,18 +23,18 @@ async function render() {
   );
 }
 
-test("server-renders the visual August 12 events board", async () => {
+test("server-renders the dynamic events finder with a last-known snapshot", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /The 25-Mile Post/);
-  assert.match(html, /Refreshed Wednesday, August 12, 2026/);
   assert.match(html, /Reptiles Around the World/);
   assert.match(html, /Fossil Frenzy Play Cafe/);
   assert.match(html, /Erie County Fair/);
   assert.doesNotMatch(html, /Au-Some Morning Edition/);
+  assert.match(html, /Refreshing local calendars/);
   assert.match(html, /Southtowns/);
   assert.match(html, /Buffalo city/);
   assert.match(html, /Town of Orchard Park/);
@@ -46,9 +46,10 @@ test("server-renders the visual August 12 events board", async () => {
   assert.equal((html.match(/<article class="event-card/g) ?? []).length, 11);
 });
 
-test("keeps the newspaper interactions and hosting metadata in source", async () => {
-  const [page, layout, hosting] = await Promise.all([
+test("keeps live refresh, interactions, source adapters and hosting metadata", async () => {
+  const [page, api, layout, hosting] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/events/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
@@ -56,11 +57,17 @@ test("keeps the newspaper interactions and hosting metadata in source", async ()
   assert.match(page, /twenty-five-mile-post-clippings/);
   assert.match(page, /api\.open-meteo\.com/);
   assert.match(page, /navigator\.share/);
+  assert.match(page, /fetch\("\/api\/events"/);
+  assert.match(page, /setInterval/);
   assert.match(page, /setTown/);
   assert.match(page, /setQuery/);
   assert.match(page, /setShowSaved/);
   assert.match(page, /Southtowns/);
   assert.match(page, /Destination Dinosaur/);
+  assert.match(api, /buffalolib\.libcal\.com\/rss\.php/);
+  assert.match(api, /orchardparkny\.gov\/events/);
+  assert.match(api, /iCalendar\.aspx/);
+  assert.match(api, /stale-while-revalidate/);
   assert.match(page, /Buffalo city/);
   assert.match(layout, /The 25-Mile Post \| Family Things To Do Near Orchard Park/);
   assert.match(layout, /images: \[\{ url: imageUrl/);
