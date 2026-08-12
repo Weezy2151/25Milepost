@@ -23,23 +23,25 @@ async function render() {
   );
 }
 
-test("server-renders the August 11 morning edition", async () => {
+test("server-renders the August 12 morning edition", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /The 25-Mile Post/);
-  assert.match(html, /Morning edition · Tuesday, August 11, 2026/);
+  assert.match(html, /Morning edition · Wednesday, August 12, 2026/);
+  assert.match(html, /Erie County Fair Opening Day/);
   assert.match(html, /Destination Dinosaur/);
-  assert.match(html, /Movie in the Park: Tangled/);
-  assert.match(html, /Erie County Fair/);
+  assert.match(html, /EPIC Storytime on the Lawn/);
+  assert.match(html, /Summer Youth Showcase/);
   assert.match(html, /Au-Some Morning Edition/);
-  assert.match(html, /Ten vetted picks through Tuesday/);
-  assert.doesNotMatch(html, /Monday, August 10, 2026|Teen Game Night|Delaware Park Flow Jam/);
+  assert.match(html, /Rock the Block/);
+  assert.match(html, /Eleven vetted picks through Wednesday/);
+  assert.doesNotMatch(html, /Tuesday, August 11, 2026|Movie in the Park: Tangled|Family Fort Night|Pokémon Club/);
 
   assert.equal((html.match(/<article class="today-card/g) ?? []).length, 5);
-  assert.equal((html.match(/<article class="week-story"/g) ?? []).length, 10);
+  assert.equal((html.match(/<article class="week-story"/g) ?? []).length, 11);
 });
 
 test("keeps the newspaper interactions and hosting metadata in source", async () => {
