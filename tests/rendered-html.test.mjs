@@ -34,7 +34,7 @@ test("server-renders the dynamic events finder with a last-known snapshot", asyn
   assert.match(html, /Fossil Frenzy Play Cafe/);
   assert.match(html, /Erie County Fair/);
   assert.doesNotMatch(html, /Au-Some Morning Edition/);
-  assert.match(html, /Refreshing local calendars/);
+  assert.match(html, /Loading this morning’s edition/);
   assert.match(html, /Southtowns/);
   assert.match(html, /Buffalo city/);
   assert.match(html, /Town of Orchard Park/);
@@ -58,7 +58,9 @@ test("keeps live refresh, interactions, source adapters and hosting metadata", a
   assert.match(page, /api\.open-meteo\.com/);
   assert.match(page, /navigator\.share/);
   assert.match(page, /fetch\("\/api\/events"/);
-  assert.match(page, /setInterval/);
+  assert.doesNotMatch(page, /setInterval/);
+  assert.match(page, /refreshed each morning/);
+  assert.match(page, /What sounds good/);
   assert.match(page, /setTown/);
   assert.match(page, /setQuery/);
   assert.match(page, /setShowSaved/);
@@ -67,6 +69,10 @@ test("keeps live refresh, interactions, source adapters and hosting metadata", a
   assert.match(api, /buffalolib\.libcal\.com\/rss\.php/);
   assert.match(api, /orchardparkny\.gov\/events/);
   assert.match(api, /iCalendar\.aspx/);
+  assert.match(api, /townofevansny\.gov\/events/);
+  assert.match(api, /capLibraries/);
+  assert.match(api, /s-maxage=86400/);
+  assert.match(api, /West Seneca Farmers Market/);
   assert.match(api, /stale-while-revalidate/);
   assert.match(page, /Buffalo city/);
   assert.match(layout, /The 25-Mile Post \| Family Things To Do Near Orchard Park/);

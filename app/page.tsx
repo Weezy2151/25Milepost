@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 type Area = "southtowns" | "city";
 type View = "southtowns" | "city" | "all";
+type EventKind = "All activities" | "Fairs & festivals" | "Markets & food" | "Live music" | "Sports & active" | "Outdoors" | "Museums & culture" | "Community" | "Library";
 
 type EventPick = {
   id: string;
@@ -25,6 +26,8 @@ type EventPick = {
   accent: string;
   image?: string;
   today?: boolean;
+  kind?: Exclude<EventKind, "All activities">;
+  priority?: number;
 };
 
 const fallbackEvents: EventPick[] = [
@@ -81,6 +84,7 @@ function EventCard({ event, saved, onToggle }: { event: EventPick; saved: string
 export default function Home() {
   const [events, setEvents] = useState<EventPick[]>(fallbackEvents);
   const [view, setView] = useState<View>("southtowns");
+  const [kind, setKind] = useState<EventKind>("All activities");
   const [town, setTown] = useState("All towns");
   const [query, setQuery] = useState("");
   const [saved, setSaved] = useState<string[]>(() => {
@@ -101,7 +105,7 @@ export default function Home() {
   const refreshEvents = async () => {
     setRefreshing(true);
     try {
-      const response = await fetch("/api/events", { cache: "no-store" });
+      const response = await fetch("/api/events");
       if (!response.ok) throw new Error("refresh failed");
       const data = await response.json();
       if (Array.isArray(data.events) && data.events.length) {
@@ -117,20 +121,22 @@ export default function Home() {
 
   useEffect(() => {
     const initialRefresh = window.setTimeout(() => void refreshEvents(), 0);
-    const refreshTimer = window.setInterval(() => void refreshEvents(), 5 * 60 * 1000);
     fetch("https://api.open-meteo.com/v1/forecast?latitude=42.767&longitude=-78.744&current=temperature_2m,weather_code&daily=temperature_2m_max,precipitation_probability_max&temperature_unit=fahrenheit&timezone=America%2FNew_York").then((response) => response.json()).then((data) => setWeather(`${weatherLabel(data.current.weather_code)} · ${Math.round(data.current.temperature_2m)}° now · ${Math.round(data.daily.temperature_2m_max[0])}° high · ${data.daily.precipitation_probability_max[0]}% rain`)).catch(() => setWeather("Forecast unavailable · check before outdoor plans"));
-    return () => { window.clearTimeout(initialRefresh); window.clearInterval(refreshTimer); };
+    return () => { window.clearTimeout(initialRefresh); };
   }, []);
 
   const matches = (event: EventPick) => {
     const inView = view === "all" || event.area === view;
     const inTown = town === "All towns" || event.town === town || (town === "Lakeshore" && event.town.includes("Lakeshore"));
+    const inKind = kind === "All activities" || event.kind === kind || (!event.kind && event.tags.some((tag) => tag === kind));
     const text = `${event.title} ${event.description} ${event.venue} ${event.town} ${event.tags.join(" ")}`.toLowerCase();
-    return inView && inTown && (!query || text.includes(query.toLowerCase())) && (!showSaved || saved.includes(event.id));
+    return inView && inTown && inKind && (!query || text.includes(query.toLowerCase())) && (!showSaved || saved.includes(event.id));
   };
   const today = events.filter((event) => event.today && matches(event));
   const upcoming = events.filter((event) => !event.today && matches(event));
   const townFilters = ["All towns", ...Array.from(new Set([...preferredTowns, ...events.map((event) => event.town)]))];
+  const kindFilters: EventKind[] = ["All activities", "Fairs & festivals", "Markets & food", "Live music", "Sports & active", "Outdoors", "Museums & culture", "Community", "Library"];
+  const nonLibraryCount = events.filter((event) => event.kind !== "Library").length;
 
   const toggleSaved = (id: string) => { const next = saved.includes(id) ? saved.filter((item) => item !== id) : [...saved, id]; setSaved(next); window.localStorage.setItem("twenty-five-mile-post-clippings", JSON.stringify(next)); setNotice(saved.includes(id) ? "Removed from saved plans." : "Saved for later on this device."); };
   const share = async () => { try { if (navigator.share) await navigator.share({ title: "The 25-Mile Post", text: "Family things to do around Orchard Park and the Southtowns", url: window.location.href }); else { await navigator.clipboard.writeText(window.location.href); setNotice("Link copied."); } } catch { setNotice("Sharing cancelled."); } };
@@ -139,17 +145,18 @@ export default function Home() {
     <main>
       <div className="site-shell">
         <header className="app-header">
-          <div className="header-top"><span>ORCHARD PARK · SOUTHTOWNS · WESTERN NEW YORK</span><span>{refreshing ? "Refreshing local calendars…" : `${events.length} live events · updates every 5 minutes`}</span><button onClick={share}>Share ↗</button></div>
+          <div className="header-top"><span>ORCHARD PARK · SOUTHTOWNS · WESTERN NEW YORK</span><span>{refreshing ? "Loading this morning’s edition…" : `${events.length} events · ${nonLibraryCount} beyond libraries · refreshed each morning`}</span><button onClick={share}>Share ↗</button></div>
           <div className="header-main"><div><p className="eyebrow">Things to do near Orchard Park</p><h1>The 25-Mile Post</h1></div><div className="weather-card"><span>Live Orchard Park weather</span><strong>{weather}</strong><small>{updatedAt ? `Events refreshed ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Loading live events…"}</small></div></div>
         </header>
 
         <section className="browse-bar" aria-label="Event browsing controls">
           <div className="view-tabs"><button className={view === "southtowns" ? "active" : ""} onClick={() => setView("southtowns")}>Southtowns</button><button className={view === "city" ? "active" : ""} onClick={() => setView("city")}>Buffalo city</button><button className={view === "all" ? "active" : ""} onClick={() => setView("all")}>All nearby</button></div>
           <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search events, towns or activities" aria-label="Search events" /></label>
-          <button className={showSaved ? "saved-filter active" : "saved-filter"} onClick={() => setShowSaved(!showSaved)}>Saved ({saved.length})</button><button className="refresh-button" onClick={() => void refreshEvents()} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh now"}</button>
+          <button className={showSaved ? "saved-filter active" : "saved-filter"} onClick={() => setShowSaved(!showSaved)}>Saved ({saved.length})</button>
         </section>
 
         <div className="town-filter" aria-label="Filter by town"><span>Filter by town</span>{townFilters.map((filter) => <button key={filter} className={town === filter ? "active" : ""} onClick={() => setTown(filter)}>{filter}</button>)}</div>
+        <div className="kind-filter" aria-label="Filter by activity"><span>What sounds good?</span>{kindFilters.map((filter) => <button key={filter} className={kind === filter ? "active" : ""} onClick={() => setKind(filter)}>{filter}</button>)}</div>
 
         <section id="today" className="events-section"><div className="section-title"><div><span className="eyebrow">{view === "southtowns" ? "Southtowns first" : view === "city" ? "Buffalo city" : "Within 25 miles"}</span><h2>Today</h2></div><p>{today.length} events</p></div>{today.length ? <div className="event-grid">{today.map((event) => <EventCard key={event.id} event={event} saved={saved} onToggle={toggleSaved} />)}</div> : <div className="empty-panel">No matching events. Try “All nearby,” another town, or clear your search.</div>}</section>
 
@@ -157,7 +164,7 @@ export default function Home() {
 
         <section id="sources" className="source-board"><div className="section-title"><div><span className="eyebrow">Our reporting desk</span><h2>Where we look</h2></div><p>Town flyers and local reporting are part of the event search, not an afterthought.</p></div><div className="source-grid"><div><h3>Town & village calendars</h3><a href="https://www.orchardparkny.gov/events/">Town of Orchard Park ↗</a><a href="https://orchardparkvillageny.gov/village-events/">Village of Orchard Park ↗</a><a href="https://www.townofhamburgny.gov/386/Calendar-of-Events">Town of Hamburg ↗</a><a href="https://villageofhamburgny.gov/events">Village of Hamburg ↗</a><a href="https://www.westseneca.gov/calendar.aspx">West Seneca ↗</a><a href="https://edenny.gov/news/">Eden ↗</a><a href="https://www.elmanewyork.gov/">Elma ↗</a><a href="https://www.bostonny.gov/events">Boston ↗</a><a href="https://townofevansny.gov/">Evans ↗</a></div><div><h3>Flyers, libraries & community desks</h3><a href="https://www.buffalolib.org/">Buffalo & Erie County Public Library ↗</a><a href="https://everythingop.com/about-everythingop/">EverythingOP ↗</a><a href="https://orchardparkchamber.org/">Orchard Park Chamber ↗</a><a href="https://southtownsregionalchamber.org/news-events/">Southtowns Regional Chamber ↗</a><a href="https://www.southbuffalo.org/calendar">South Buffalo Community Association ↗</a><a href="https://www.wnyfamilymagazine.com/search/event/calendar-of-events/index.html">WNY Family Magazine ↗</a><a href="https://stepoutbuffalo.com/all-events/">Step Out Buffalo ↗</a></div><div><h3>Local papers & regional guides</h3><a href="https://www.orchardparkbee.com/">Orchard Park Bee ↗</a><a href="https://www.sun-news.com/">Hamburg Sun ↗</a><a href="https://westseneca.org/members/west-seneca-bee-2/">West Seneca Bee ↗</a><a href="https://www.buffalonews.com/">The Buffalo News ↗</a><a href="https://visitbuffalo.com/events/">Visit Buffalo Niagara ↗</a><a href="https://www3.erie.gov/parks/calendar">Erie County Parks ↗</a></div></div></section>
 
-        <footer className="app-footer"><b>The 25-Mile Post</b><span>Approximate driving distance from central Orchard Park.</span><span>Always confirm registration, weather, tickets and last-minute changes with the linked organizer.</span><span>Family-friendly picks only · nightlife and ended events removed.</span></footer>
+        <footer className="app-footer"><b>The 25-Mile Post</b><span>Event calendars refresh once each morning; Orchard Park weather is fetched live when you open the page.</span><span>Approximate driving distance from central Orchard Park.</span><span>Always confirm registration, weather, tickets and last-minute changes with the linked organizer.</span></footer>
       </div>
       {notice && <button className="toast" onClick={() => setNotice("")} aria-live="polite">{notice} <span>×</span></button>}
     </main>
