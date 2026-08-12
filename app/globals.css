@@ -190,6 +190,10 @@ main { min-height: 100vh; padding: 22px; }
 .week-section { padding-bottom: 18px; }
 .week-heading { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 0; }
 .filter-desk { padding: 20px 0; border-bottom: 3px solid var(--rule); }
+.region-tabs { display: flex; gap: 0; margin-bottom: 18px; border-bottom: 1px solid var(--ink); }
+.region-tab { border: 1px solid var(--ink); border-bottom: 0; background: transparent; padding: 11px 18px 10px; cursor: pointer; font: 900 10px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; }
+.region-tab + .region-tab { margin-left: 6px; }
+.region-tab:hover, .region-tab.active { background: var(--red); border-color: var(--red); color: white; }
 .filter-block { display: grid; grid-template-columns: 160px 1fr; gap: 18px; align-items: center; margin-bottom: 10px; }
 .filter-label { font: 800 9px/1 var(--sans); letter-spacing: .11em; text-transform: uppercase; }
 .filter-pills { display: flex; flex-wrap: wrap; gap: 7px; }

@@ -23,23 +23,25 @@ async function render() {
   );
 }
 
-test("server-renders the August 11 morning edition", async () => {
+test("server-renders the August 12 Southtowns-first morning edition", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /The 25-Mile Post/);
-  assert.match(html, /Morning edition · Tuesday, August 11, 2026/);
+  assert.match(html, /Morning edition · Wednesday, August 12, 2026/);
   assert.match(html, /Destination Dinosaur/);
-  assert.match(html, /Movie in the Park: Tangled/);
+  assert.match(html, /Reptiles Around the World/);
+  assert.match(html, /Fossil Frenzy Play Cafe/);
   assert.match(html, /Erie County Fair/);
-  assert.match(html, /Au-Some Morning Edition/);
-  assert.match(html, /Ten vetted picks through Tuesday/);
-  assert.doesNotMatch(html, /Monday, August 10, 2026|Teen Game Night|Delaware Park Flow Jam/);
+  assert.doesNotMatch(html, /Au-Some Morning Edition/);
+  assert.match(html, /Southtowns-first desk/);
+  assert.match(html, /Buffalo city picks in their own tab/);
+  assert.doesNotMatch(html, /Tuesday, August 11, 2026|Movie in the Park: Tangled|Teen Game Night|Delaware Park Flow Jam/);
 
   assert.equal((html.match(/<article class="today-card/g) ?? []).length, 5);
-  assert.equal((html.match(/<article class="week-story"/g) ?? []).length, 10);
+  assert.equal((html.match(/<article class="week-story"/g) ?? []).length, 7);
 });
 
 test("keeps the newspaper interactions and hosting metadata in source", async () => {
@@ -56,6 +58,9 @@ test("keeps the newspaper interactions and hosting metadata in source", async ()
   assert.match(page, /setMaxDistance/);
   assert.match(page, /setActiveFilter/);
   assert.match(page, /setActiveDay/);
+  assert.match(page, /activeRegion/);
+  assert.match(page, /Southtowns first/);
+  assert.match(page, /Buffalo city/);
   assert.match(layout, /The 25-Mile Post \| Family Things To Do Near Orchard Park/);
   assert.match(layout, /images: \[\{ url: imageUrl/);
 
