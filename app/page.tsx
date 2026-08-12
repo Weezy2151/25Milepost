@@ -403,7 +403,46 @@ export default function Home() {
           </div>
         </section>
 
-        <footer id="sources" className="paper-footer">
+        <section id="sources" className="source-board">
+          <div className="section-heading">
+            <div>
+              <p className="section-kicker">The local noticeboard</p>
+              <h2>Town flyers & local papers</h2>
+            </div>
+            <p>We keep checking these town halls, recreation calendars, newsletters and community newsrooms for the next edition.</p>
+          </div>
+          <div className="source-board-grid">
+            <div className="source-group">
+              <h3>Southtowns town desks</h3>
+              <a href="https://www.orchardparkny.gov/events/" target="_blank" rel="noreferrer">Town of Orchard Park · events & notices ↗</a>
+              <a href="https://orchardparkvillageny.gov/village-events/" target="_blank" rel="noreferrer">Village of Orchard Park · events ↗</a>
+              <a href="https://www.opschools.org/orchard-park-calendar" target="_blank" rel="noreferrer">Orchard Park schools · district calendar ↗</a>
+              <a href="https://www.townofhamburgny.gov/386/Calendar-of-Events" target="_blank" rel="noreferrer">Town of Hamburg · calendar of events ↗</a>
+              <a href="https://villageofhamburgny.gov/events" target="_blank" rel="noreferrer">Village of Hamburg · community events ↗</a>
+              <a href="https://www.westseneca.gov/calendar.aspx" target="_blank" rel="noreferrer">Town of West Seneca · calendar & recreation ↗</a>
+            </div>
+            <div className="source-group">
+              <h3>Nearby town flyers</h3>
+              <a href="https://edenny.gov/news/" target="_blank" rel="noreferrer">Town of Eden · news, notices & event flyers ↗</a>
+              <a href="https://www.elmanewyork.gov/" target="_blank" rel="noreferrer">Town of Elma · town news & announcements ↗</a>
+              <a href="https://www.bostonny.gov/events" target="_blank" rel="noreferrer">Town of Boston · events calendar ↗</a>
+              <a href="https://townofevansny.gov/" target="_blank" rel="noreferrer">Town of Evans · town calendar ↗</a>
+              <a href="https://everythingop.com/about-everythingop/" target="_blank" rel="noreferrer">EverythingOP · reviewed Orchard Park community listings ↗</a>
+              <a href="https://www.buffalony.gov/calendar.aspx?CID=34&month=8&view=list&year=2026" target="_blank" rel="noreferrer">City of Buffalo · special events calendar ↗</a>
+            </div>
+            <div className="source-group">
+              <h3>Local papers & reporting</h3>
+              <a href="https://www.orchardparkbee.com/" target="_blank" rel="noreferrer">Orchard Park Bee ↗</a>
+              <a href="https://www.sun-news.com/" target="_blank" rel="noreferrer">Hamburg Sun · Hamburg, Eden, Evans & Blasdell ↗</a>
+              <a href="https://westseneca.org/members/west-seneca-bee-2/" target="_blank" rel="noreferrer">West Seneca Bee ↗</a>
+              <a href="https://www.buffalonews.com/" target="_blank" rel="noreferrer">The Buffalo News · local reporting ↗</a>
+              <a href="https://www.southbuffalo.org/news" target="_blank" rel="noreferrer">South Buffalo Community Association · neighborhood news ↗</a>
+              <a href="https://southtownsregionalchamber.org/news-events/" target="_blank" rel="noreferrer">Southtowns Regional Chamber · community news & events ↗</a>
+            </div>
+          </div>
+        </section>
+
+        <footer className="paper-footer">
           <div>
             <p className="footer-brand">The 25-Mile Post</p>
             <p>A morning family field guide centered on Orchard Park, New York.</p>

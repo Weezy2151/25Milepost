@@ -38,6 +38,10 @@ test("server-renders the August 12 Southtowns-first morning edition", async () =
   assert.doesNotMatch(html, /Au-Some Morning Edition/);
   assert.match(html, /Southtowns-first desk/);
   assert.match(html, /Buffalo city picks in their own tab/);
+  assert.match(html, /Town of Orchard Park/);
+  assert.match(html, /Town of Hamburg/);
+  assert.match(html, /Orchard Park Bee/);
+  assert.match(html, /Hamburg Sun/);
   assert.doesNotMatch(html, /Tuesday, August 11, 2026|Movie in the Park: Tangled|Teen Game Night|Delaware Park Flow Jam/);
 
   assert.equal((html.match(/<article class="today-card/g) ?? []).length, 5);
