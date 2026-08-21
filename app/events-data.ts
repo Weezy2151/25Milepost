@@ -37,7 +37,17 @@ export type EventPick = {
   kind?: Exclude<EventKind, "All activities">;
   setting?: "indoor" | "outdoor" | "both";
   priority?: number;
+  lat?: number;
+  lon?: number;
+  /** How precisely the venue was placed: exact venue, town centroid, or unknown. */
+  distancePrecision?: "venue" | "town" | "region";
 };
+
+/**
+ * The bundled snapshot is a point-in-time copy, not live data. Surfacing the
+ * date lets the UI say so plainly instead of presenting stale listings as today's.
+ */
+export const SNAPSHOT_DATE = "2026-08-12";
 
 const legacyFallbackEvents: EventPick[] = [
   { id: "erie-fair", area: "southtowns", town: "Hamburg", day: "TODAY", date: "Wed, Aug 12", time: "11 AM–10 PM · midway noon–11", title: "Erie County Fair · Opening Day", venue: "Hamburg Fairgrounds", distance: 6, description: "Rides, farm animals, 4-H exhibits, food and opening-day community spirit make this the Southtowns’ biggest family outing.", cost: "Free with 4+ canned goods · otherwise $19 adult", source: "Erie County Fair", url: "https://www.ecfair.org/p/info/admissionparking", mapUrl: "https://www.google.com/maps/search/?api=1&query=Hamburg+Fairgrounds+5600+McKinley+Parkway+Hamburg+NY", tags: ["Fair", "Kids", "Food"], accent: "coral", image: "/events/erie-county-fair.jpg", today: true, setting: "both" },

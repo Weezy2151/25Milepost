@@ -14,6 +14,11 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
+  // Warm the event cache before the morning rush, then top it up through the
+  // day. Times are UTC: 09:10 UTC is ~5:10 AM Eastern.
+  triggers: {
+    crons: ["10 9 * * *", "10 15 * * *"],
+  },
   d1_databases: d1
     ? [
         {

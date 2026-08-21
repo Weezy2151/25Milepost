@@ -48,6 +48,9 @@
   --good-soft: rgba(15, 157, 112, 0.12);
   --info: #2f77e6;
   --info-soft: rgba(47, 119, 230, 0.1);
+  --warn: #d97706;
+  --warn-ink: #92400e;
+  --warn-soft: rgba(217, 119, 6, 0.1);
   --shadow-1: 0 1px 2px rgba(20, 24, 31, 0.05), 0 2px 8px rgba(20, 24, 31, 0.04);
   --shadow-2: 0 2px 4px rgba(20, 24, 31, 0.05), 0 12px 28px rgba(20, 24, 31, 0.09);
   --shadow-3: 0 24px 60px rgba(20, 24, 31, 0.22);
@@ -72,6 +75,9 @@
   --good-soft: rgba(53, 201, 154, 0.14);
   --info: #6aa5ff;
   --info-soft: rgba(106, 165, 255, 0.14);
+  --warn: #f0b429;
+  --warn-ink: #f5c65a;
+  --warn-soft: rgba(240, 180, 41, 0.14);
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.3);
   --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 14px 34px rgba(0, 0, 0, 0.45);
   --shadow-3: 0 24px 70px rgba(0, 0, 0, 0.6);
@@ -97,6 +103,9 @@
     --good-soft: rgba(53, 201, 154, 0.14);
     --info: #6aa5ff;
     --info-soft: rgba(106, 165, 255, 0.14);
+    --warn: #f0b429;
+    --warn-ink: #f5c65a;
+    --warn-soft: rgba(240, 180, 41, 0.14);
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.3);
     --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 14px 34px rgba(0, 0, 0, 0.45);
     --shadow-3: 0 24px 70px rgba(0, 0, 0, 0.6);
@@ -428,6 +437,23 @@ button { cursor: pointer; }
 .glance-cell b { display: block; font: 700 24px/1 var(--serif); letter-spacing: -0.03em; }
 .glance-cell span { display: block; margin-top: 5px; color: var(--text-3); font: 700 10px/1.2 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
 
+/* Skip link -------------------------------------------------- */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--text);
+  color: var(--bg);
+  font: 800 13px/1 var(--sans);
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform var(--fast);
+}
+.skip-link:focus-visible { transform: translateY(0); }
+
 /* Advisory banner ------------------------------------------- */
 .advisory {
   display: flex;
@@ -453,6 +479,79 @@ button { cursor: pointer; }
   font: 800 12px/1 var(--sans);
 }
 .advisory button:hover, .advisory button.on { background: var(--info); color: var(--surface); border-color: var(--info); }
+
+.advisory.warn {
+  border-color: color-mix(in oklab, var(--warn) 40%, transparent);
+  background: var(--warn-soft);
+}
+.advisory.warn button {
+  border-color: color-mix(in oklab, var(--warn) 50%, transparent);
+  color: var(--warn-ink);
+}
+.advisory.warn button:hover { background: var(--warn-ink); color: var(--surface); border-color: var(--warn-ink); }
+.warn-text { color: var(--warn-ink); }
+
+/* Per-event forecast chip ------------------------------------ */
+.tag.weather {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid color-mix(in oklab, var(--info) 30%, transparent);
+  background: var(--info-soft);
+  color: var(--info);
+}
+.tag.weather i { font-style: normal; font-size: 11px; line-height: 1; }
+.tag.weather.wet {
+  border-color: color-mix(in oklab, var(--warn) 35%, transparent);
+  background: var(--warn-soft);
+  color: var(--warn-ink);
+}
+
+/* Render-error fallback -------------------------------------- */
+.crash {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--gutter);
+  background: var(--bg);
+}
+.crash-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: flex-start;
+  max-width: 480px;
+  padding: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+.crash-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 800 15px/1 var(--sans);
+}
+.crash-card h1 { margin: 0; font: 700 28px/1.1 var(--serif); letter-spacing: -0.03em; }
+.crash-card p { margin: 0; color: var(--text-2); font-size: 14.5px; line-height: 1.6; }
+.crash-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.crash-detail { width: 100%; margin-top: 4px; }
+.crash-detail summary { color: var(--text-3); font: 700 12px/1 var(--sans); cursor: pointer; }
+.crash-detail code {
+  display: block;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  word-break: break-word;
+}
 
 /* ============================================================
    Filter bar (single source of truth)

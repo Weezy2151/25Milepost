@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type SVGProps } from
 import {
   fallbackEvents,
   preferredTowns,
+  SNAPSHOT_DATE,
   type EventKind,
   type EventPick,
   type SettingFilter,
@@ -86,21 +87,64 @@ function moodLabel(vibe: Vibe) {
   return MOODS.find((mood) => mood.id === vibe)?.label ?? "All";
 }
 
-/** Locks page scroll and wires Escape while a drawer is open. */
-function useDismissable(open: boolean, onClose: () => void) {
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Modal plumbing for the drawers and sheet: locks page scroll, closes on
+ * Escape, keeps Tab inside the panel, and hands focus back to whatever opened
+ * it. Without the trap, keyboard and screen-reader users tab straight through
+ * the scrim into the page behind.
+ */
+function useModal(open: boolean, onClose: () => void) {
+  const panelRef = useRef<HTMLElement>(null);
+
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    const previous = document.body.style.overflow;
+    const opener = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    document.addEventListener("keydown", onKey);
+
+    const panel = panelRef.current;
+    const focusables = () => Array.from(panel?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []).filter((el) => el.offsetParent !== null);
+    // Focus the panel itself rather than its close button, so screen readers
+    // announce the dialog label before any control.
+    panel?.focus();
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || active === panel)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKey, true);
     return () => {
-      document.body.style.overflow = previous;
-      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKey, true);
+      // Only steal focus back if it is still inside the panel we are closing.
+      if (!document.activeElement || document.activeElement === document.body) opener?.focus();
     };
   }, [open, onClose]);
+
+  return panelRef;
 }
 
 /* ------------------------------------------------------------ filter menu */
@@ -186,6 +230,7 @@ function EventCard({
   event,
   isSaved,
   inPlan,
+  forecast,
   onToggleSave,
   onTogglePlan,
   onOpen,
@@ -193,6 +238,7 @@ function EventCard({
   event: EventPick;
   isSaved: boolean;
   inPlan: boolean;
+  forecast: DayForecast | null;
   onToggleSave: (id: string) => void;
   onTogglePlan: (event: EventPick) => void;
   onOpen: (event: EventPick) => void;
@@ -214,7 +260,10 @@ function EventCard({
         )}
         <span className="card-flags">
           <span className={event.today ? "flag today" : "flag"}>{event.day}</span>
-          <span className="flag">{event.distance} mi</span>
+          <span className="flag" title={event.distancePrecision === "town" ? `Approximate — measured from the centre of ${event.town}` : undefined}>
+            {event.distancePrecision === "town" || event.distancePrecision === "region" ? "~" : ""}
+            {event.distance} mi
+          </span>
         </span>
       </button>
 
@@ -234,6 +283,11 @@ function EventCard({
         </p>
         <p className="card-desc">{event.description}</p>
         <div className="card-tags">
+          {forecast && (
+            <span className={forecast.rain >= 40 ? "tag weather wet" : "tag weather"} title={`${forecast.label} on the day of this event`}>
+              <i aria-hidden="true">{weatherEmoji(forecast.code)}</i> {forecast.high}° · {forecast.rain}% rain
+            </span>
+          )}
           <span className="tag setting">{settingLabel(event.setting)}</span>
           {tags.map((tag) => (
             <span key={tag} className="tag">
@@ -295,11 +349,35 @@ function SkeletonCard() {
 
 /* -------------------------------------------------------------- home page */
 
-type Weather = { label: string; now: number; high: number; rain: number } | null;
+/** One day of the forecast, keyed by ISO date so events can look themselves up. */
+type DayForecast = { dateKey: string; label: string; high: number; low: number; rain: number; code: number };
+type Weather = { label: string; now: number; high: number; rain: number; days: DayForecast[] } | null;
+
+/** Short weather note for an event's own date — only worth showing outdoors. */
+function forecastFor(event: EventPick, days: DayForecast[]) {
+  if (!event.dateKey || event.setting === "indoor") return null;
+  return days.find((day) => day.dateKey === event.dateKey) ?? null;
+}
+
+function weatherEmoji(code: number) {
+  if (code === 0) return "☀️";
+  if (code <= 3) return "⛅";
+  if (code <= 48) return "🌫️";
+  if (code <= 67 || (code >= 80 && code <= 82)) return "🌧️";
+  if (code <= 77) return "❄️";
+  if (code >= 95) return "⛈️";
+  return "🌤️";
+}
 
 export default function Home() {
   const [events, setEvents] = useState<EventPick[]>(fallbackEvents);
   const [loading, setLoading] = useState(true);
+  /** "snapshot" until live calendars answer, so the UI can say which it is showing. */
+  const [feed, setFeed] = useState<{ state: "snapshot" | "live"; ok: number; total: number }>({
+    state: "snapshot",
+    ok: 0,
+    total: 0,
+  });
 
   const [view, setView] = useState<View>("southtowns");
   const [kind, setKind] = useState<EventKind>("All activities");
@@ -352,24 +430,40 @@ export default function Home() {
         if (Array.isArray(data.events) && data.events.length) {
           setEvents(data.events);
           setUpdatedAt(data.updatedAt);
+          const sources: Array<{ ok: boolean }> = Array.isArray(data.sources) ? data.sources : [];
+          setFeed({
+            state: "live",
+            ok: sources.filter((source) => source.ok).length,
+            total: sources.length,
+          });
         }
       } catch {
-        setNotice("A source refresh failed — showing the last verified snapshot.");
+        // Leave feed.state as "snapshot"; the banner explains what is on screen.
       } finally {
         setLoading(false);
       }
     })();
 
     fetch(
-      "https://api.open-meteo.com/v1/forecast?latitude=42.767&longitude=-78.744&current=temperature_2m,weather_code&daily=temperature_2m_max,precipitation_probability_max&temperature_unit=fahrenheit&timezone=America%2FNew_York",
+      "https://api.open-meteo.com/v1/forecast?latitude=42.767&longitude=-78.744&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&temperature_unit=fahrenheit&timezone=America%2FNew_York&forecast_days=8",
     )
       .then((response) => response.json())
       .then((data) => {
+        const daily = data.daily ?? {};
+        const days: DayForecast[] = (daily.time ?? []).map((dateKey: string, index: number) => ({
+          dateKey,
+          label: weatherLabel(daily.weather_code?.[index] ?? 0),
+          high: Math.round(daily.temperature_2m_max?.[index] ?? 0),
+          low: Math.round(daily.temperature_2m_min?.[index] ?? 0),
+          rain: daily.precipitation_probability_max?.[index] ?? 0,
+          code: daily.weather_code?.[index] ?? 0,
+        }));
         setWeather({
           label: weatherLabel(data.current.weather_code),
           now: Math.round(data.current.temperature_2m),
-          high: Math.round(data.daily.temperature_2m_max[0]),
-          rain: data.daily.precipitation_probability_max?.[0] ?? 0,
+          high: days[0]?.high ?? 0,
+          rain: days[0]?.rain ?? 0,
+          days,
         });
       })
       .catch(() => setWeather(null));
@@ -538,14 +632,15 @@ export default function Home() {
   const closeDetails = useCallback(() => setSelected(null), []);
   const closePlan = useCallback(() => setPlanOpen(false), []);
   const closeSheet = useCallback(() => setSheetOpen(false), []);
-  useDismissable(selected !== null, closeDetails);
-  useDismissable(planOpen, closePlan);
-  useDismissable(sheetOpen, closeSheet);
+  const detailRef = useModal(selected !== null, closeDetails);
+  const planRef = useModal(planOpen, closePlan);
+  const sheetRef = useModal(sheetOpen, closeSheet);
 
   const cardProps = (event: EventPick) => ({
     event,
     isSaved: saved.includes(event.id),
     inPlan: plan.some((item) => item.id === event.id),
+    forecast: weather ? forecastFor(event, weather.days) : null,
     onToggleSave: toggleSave,
     onTogglePlan: togglePlan,
     onOpen: setSelected,
@@ -555,6 +650,15 @@ export default function Home() {
 
   return (
     <>
+      <a className="skip-link" href="#results">
+        Skip to events
+      </a>
+
+      {/* Filtering is instant and silent for sighted users; announce it for the rest. */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {`${filtered.length} ${filtered.length === 1 ? "event" : "events"} match your filters, ${today.length} today.`}
+      </p>
+
       <header className="topbar">
         <div className="wrap topbar-inner">
           <a className="wordmark" href="#top">
@@ -668,6 +772,12 @@ export default function Home() {
                         <b>{weather.rain}%</b>
                       </div>
                       <div className="wcard-row">
+                        <span>Calendars checked</span>
+                        <b className={feed.state === "live" && feed.ok < feed.total ? "warn-text" : undefined}>
+                          {feed.state === "live" ? `${feed.ok} of ${feed.total}` : loading ? "Checking…" : "Unreachable"}
+                        </b>
+                      </div>
+                      <div className="wcard-row">
                         <span>Events updated</span>
                         <b>
                           {updatedAt
@@ -702,6 +812,34 @@ export default function Home() {
               </div>
             </div>
           </div>
+
+          {!loading && feed.state === "snapshot" && (
+            <div className="wrap">
+              <div className="advisory warn" role="status">
+                <p>
+                  ⚠️ <strong>Live calendars are unreachable right now.</strong> You are seeing a saved snapshot from{" "}
+                  {new Date(`${SNAPSHOT_DATE}T12:00:00`).toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })},
+                  so dates and times below may have passed.
+                </p>
+                <button type="button" onClick={() => window.location.reload()}>
+                  Try again
+                </button>
+              </div>
+            </div>
+          )}
+
+          {feed.state === "live" && feed.ok < feed.total && (
+            <div className="wrap">
+              <div className="advisory warn" role="status">
+                <p>
+                  ⚠️ <strong>
+                    {feed.total - feed.ok} of {feed.total} calendars didn&rsquo;t respond.
+                  </strong>{" "}
+                  Everything below is current, but a few towns may be missing events today.
+                </p>
+              </div>
+            </div>
+          )}
 
           {rainLikely && (
             <div className="wrap">
@@ -859,7 +997,7 @@ export default function Home() {
         )}
 
         {/* -------------------------------------------------------- results */}
-        <section className="wrap section" id="today" aria-label="Events today">
+        <section className="wrap section" id="results" aria-label="Events today">
           <div className="section-head">
             <div>
               <p className="eyebrow">{view === "southtowns" ? "Southtowns first" : view === "city" ? "Buffalo city" : "Everything within 25 miles"}</p>
@@ -1021,7 +1159,7 @@ export default function Home() {
       {selected && (
         <div className="scrim">
           <button type="button" className="scrim-hit" onClick={closeDetails} aria-label="Close details" />
-          <aside className="drawer" role="dialog" aria-modal="true" aria-label={selected.title}>
+          <aside className="drawer" role="dialog" aria-modal="true" aria-label={selected.title} ref={detailRef} tabIndex={-1}>
             <div className="drawer-top">
               <strong>{selected.day} · {selected.date}</strong>
               <button type="button" className="icon-btn" onClick={closeDetails} aria-label="Close details">
@@ -1113,7 +1251,7 @@ export default function Home() {
       {planOpen && (
         <div className="scrim">
           <button type="button" className="scrim-hit" onClick={closePlan} aria-label="Close planner" />
-          <aside className="drawer" role="dialog" aria-modal="true" aria-label="My Day planner">
+          <aside className="drawer" role="dialog" aria-modal="true" aria-label="My Day planner" ref={planRef} tabIndex={-1}>
             <div className="drawer-top">
               <strong>My Day · {plan.length} {plan.length === 1 ? "stop" : "stops"}</strong>
               <button type="button" className="icon-btn" onClick={closePlan} aria-label="Close planner">
@@ -1194,7 +1332,7 @@ export default function Home() {
       {sheetOpen && (
         <div className="scrim bottom">
           <button type="button" className="scrim-hit" onClick={closeSheet} aria-label="Close filters" />
-          <aside className="sheet" role="dialog" aria-modal="true" aria-label="Filters">
+          <aside className="sheet" role="dialog" aria-modal="true" aria-label="Filters" ref={sheetRef} tabIndex={-1}>
             <span className="sheet-grab" aria-hidden="true" />
             <div className="drawer-top" style={{ background: "transparent", border: 0 }}>
               <strong>Refine</strong>

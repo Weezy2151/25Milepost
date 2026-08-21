@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
+import { ErrorBoundary } from "./error-boundary";
 
 const title = "The 25-Mile Post | Family Things To Do Near Orchard Park";
 const description =
@@ -46,7 +47,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         />
         <script dangerouslySetInnerHTML={{ __html: themeBoot }} />
       </head>
-      <body>{children}</body>
+      <body>
+        <ErrorBoundary>{children}</ErrorBoundary>
+      </body>
     </html>
   );
 }

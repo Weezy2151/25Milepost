@@ -1,4 +1,6 @@
 import { getCachedData, setCachedData } from "../../../db/cache";
+import { distanceFromOrigin, type Precision } from "../../../lib/geo";
+import { describe, resolveImages } from "../../../lib/enrich";
 
 type EventKind = "Fairs & festivals" | "Markets & food" | "Live music" | "Sports & active" | "Outdoors" | "Museums & culture" | "Community" | "Library";
 export type EventSetting = "indoor" | "outdoor" | "both";
@@ -26,6 +28,10 @@ export type LiveEvent = {
   kind: EventKind;
   setting: EventSetting;
   priority: number;
+  lat: number;
+  lon: number;
+  /** How precisely we placed the venue: exact, town centroid, or unknown. */
+  distancePrecision: Precision;
 };
 
 const ZONE = "America/New_York";
@@ -161,7 +167,7 @@ function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[
     if (dateKey < todayKey || dateKey > endKey) return [];
     const venue = cleanHtml(textBetween(item, "libcal:campus"));
     const info = branchInfo[venue];
-    if (!info || info.distance > 25) return [];
+    if (!info) return [];
     const title = cleanHtml(textBetween(item, "title"));
     const description = cleanHtml(textBetween(item, "libcal:description"));
     if (/citizenship test|summer reading (program|logs?|raffle)|kids summer reading|read it & keep it|reading challenge|passive program/i.test(title)) return [];
@@ -178,11 +184,14 @@ function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[
     const kind = "Library" as const;
     const setting = inferSetting(title, description, venue, tags, kind);
 
+    const located = place(venue, info.town);
+    if (located.distance > 25) return [];
+
     return [{
       id: `lib-${decode(textBetween(item, "libcal:eventid")) || index}-${dateKey}`,
       area: info.area, town: info.town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey, time,
-      title, venue, distance: info.distance,
-      description: description.slice(0, 220) || `${category || "Library program"} for local families.`,
+      title, venue, ...located,
+      description: describe(description, title, venue, info.town),
       cost: `Free${registrations ? " · registration may be required" : ""}`,
       source: "Buffalo & Erie County Public Library", url, mapUrl: mapUrl(venue, info.town),
       tags,
@@ -215,8 +224,10 @@ function inferTown(location: string, area: "southtowns" | "city") {
   return places.find((place) => location.toLowerCase().includes(place.toLowerCase())) ?? (area === "city" ? "Buffalo" : "Orchard Park");
 }
 
-function inferDistance(town: string) {
-  return ({ "Orchard Park": 1, Hamburg: 8, "West Seneca": 9, Eden: 16, Elma: 10, Boston: 17, Blasdell: 8, Lackawanna: 10, "East Aurora": 12, Lancaster: 18, "South Buffalo": 12, Buffalo: 18 } as Record<string, number>)[town] ?? 18;
+/** Venue-level coordinates and a real driving estimate, not a per-town constant. */
+function place(venue: string, town: string) {
+  const { distance, coords, precision } = distanceFromOrigin(venue, town);
+  return { distance, lat: coords.lat, lon: coords.lon, distancePrecision: precision };
 }
 
 function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city", todayKey: string, endKey: string): LiveEvent[] {
@@ -232,8 +243,8 @@ function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city
     const venue = icsValue(block, "LOCATION") || source;
     const sourceTown = source === "Town of Evans" ? "Lakeshore" : source === "West Seneca Recreation" ? "West Seneca" : source === "Hamburg Recreation" ? "Hamburg" : "";
     const town = sourceTown || inferTown(venue, defaultArea);
-    const distance = inferDistance(town);
-    if (distance > 25) return [];
+    const located = place(venue, town);
+    if (located.distance > 25) return [];
     const area = town === "Buffalo" ? "city" : defaultArea;
     const sourceUrl = source === "Town of Orchard Park" ? "https://www.orchardparkny.gov/events/" : source === "Town of Evans" ? "https://townofevansny.gov/events/" : source === "West Seneca Recreation" ? "https://westsenecany.myrec.com/info/calendar/list.aspx" : source === "Hamburg Recreation" ? "https://www.townofhamburgny.gov/Calendar.aspx" : "https://www.buffalony.gov/calendar.aspx?CID=34&view=list";
     const url = icsValue(block, "URL") || sourceUrl;
@@ -244,8 +255,8 @@ function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city
     return [{
       id: `ics-${source}-${index}-${dateKey}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       area, town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey,
-      time: icsTime(rawStart), title, venue, distance,
-      description: description.slice(0, 220) || "See the official listing for event details.",
+      time: icsTime(rawStart), title, venue, ...located,
+      description: describe(description, title, venue, town),
       cost: /\bfree\b/i.test(description) ? "Free" : "See listing",
       source, url, mapUrl: mapUrl(venue, town),
       tags,
@@ -669,7 +680,7 @@ function generateDynamicRecurringEvents(todayKey: string, endKey: string): LiveE
           time: template.time,
           title: template.title,
           venue: template.venue,
-          distance: template.distance,
+          ...place(template.venue, template.town),
           description: template.description,
           cost: template.cost,
           source: template.source,
@@ -777,6 +788,7 @@ function featuredMajorEvents(todayKey: string, endKey: string): LiveEvent[] {
     const date = item.endDateKey ? `${formatDate(dateKey)}–${formatDate(item.endDateKey)}` : formatDate(dateKey);
     return [{
       ...item,
+      ...place(item.venue, item.town),
       dateKey,
       date,
       day: dayLabel(dateKey, todayKey),
@@ -814,33 +826,33 @@ function dedupe(events: LiveEvent[]) {
   });
 }
 
-export async function GET() {
+export type EventsPayload = {
+  events: LiveEvent[];
+  count: number;
+  updatedAt: string;
+  window: { from: string; to: string };
+  sources: Array<{ name: string; ok: boolean }>;
+  mix: Record<string, number>;
+};
+
+const CACHE_TTL_SECONDS = 3600;
+const CACHE_HEADERS = {
+  "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
+};
+
+function cacheKeyFor(todayKey: string) {
+  return `events:balanced-v2:${todayKey}`;
+}
+
+/**
+ * Fetch every source, normalise, enrich and cache.
+ *
+ * Exported so the scheduled worker can warm the cache each morning — otherwise
+ * the first visitor after the TTL expires pays for nine live feed fetches.
+ */
+export async function buildEventsPayload(): Promise<EventsPayload> {
   const todayKey = localDateKey();
   const endKey = addDays(todayKey, 7);
-  const cacheKey = `events:balanced-v2:${todayKey}`;
-
-  // 1. Check D1 / Memory cache
-  try {
-    const cached = await getCachedData<{
-      events: LiveEvent[];
-      count: number;
-      updatedAt: string;
-      window: { from: string; to: string };
-      sources: Array<{ name: string; ok: boolean }>;
-      mix: Record<string, number>;
-    }>(cacheKey);
-
-    if (cached && Array.isArray(cached.events) && cached.events.length > 0) {
-      return Response.json(cached, {
-        headers: {
-          "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
-          "X-Cache": "HIT",
-        },
-      });
-    }
-  } catch {
-    // Cache lookup failed, continue with live fetch
-  }
 
   // 2. Fetch live feeds with timeouts
   const requests = [
@@ -875,33 +887,52 @@ export async function GET() {
     (a, b) => a.dateKey.localeCompare(b.dateKey) || b.priority - a.priority || a.distance - b.distance || a.time.localeCompare(b.time)
   );
 
+  // 4. Give image-less events a real preview picture where the source page has one
+  const needImages = normalized.filter((event) => !event.image);
+  const images = await resolveImages(needImages.map((event) => event.url));
+  const withImages = normalized.map((event) =>
+    event.image || !images.has(event.url) ? event : { ...event, image: images.get(event.url) },
+  );
+
   const mix = Object.fromEntries(
-    [...new Set(normalized.map((event) => event.kind))].map((kind) => [
+    [...new Set(withImages.map((event) => event.kind))].map((kind) => [
       kind,
-      normalized.filter((event) => event.kind === kind).length,
+      withImages.filter((event) => event.kind === kind).length,
     ])
   );
 
-  const payload = {
-    events: normalized,
-    count: normalized.length,
+  const payload: EventsPayload = {
+    events: withImages,
+    count: withImages.length,
     updatedAt: new Date().toISOString(),
     window: { from: todayKey, to: endKey },
     sources,
     mix,
   };
 
-  // 4. Save to D1 / Memory cache with 1-hour TTL
+  // 5. Save to D1 / Memory cache with 1-hour TTL
   try {
-    await setCachedData(cacheKey, payload, 3600);
+    await setCachedData(cacheKeyFor(todayKey), payload, CACHE_TTL_SECONDS);
   } catch {
     // Cache write error ignored
   }
 
-  return Response.json(payload, {
-    headers: {
-      "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
-      "X-Cache": "MISS",
-    },
-  });
+  return payload;
+}
+
+export async function GET() {
+  const todayKey = localDateKey();
+
+  // 1. Serve from D1 / Memory cache when it is warm
+  try {
+    const cached = await getCachedData<EventsPayload>(cacheKeyFor(todayKey));
+    if (cached && Array.isArray(cached.events) && cached.events.length > 0) {
+      return Response.json(cached, { headers: { ...CACHE_HEADERS, "X-Cache": "HIT" } });
+    }
+  } catch {
+    // Cache lookup failed, continue with live fetch
+  }
+
+  const payload = await buildEventsPayload();
+  return Response.json(payload, { headers: { ...CACHE_HEADERS, "X-Cache": "MISS" } });
 }
