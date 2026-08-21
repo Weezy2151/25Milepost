@@ -1,7 +1,6 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { buildEventsPayload } from "../app/api/events/route";
 
 interface Env {
   ASSETS: Fetcher;
@@ -58,12 +57,14 @@ const worker = {
    * "refreshed each morning" promise literally true.
    */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(
-      buildEventsPayload().then(
-        (payload) => console.log(`[cron ${event.cron}] cached ${payload.count} events`),
-        (error) => console.error(`[cron ${event.cron}] refresh failed`, error),
-      ),
-    );
+    // Imported lazily: the route pulls in `cloudflare:workers`, which must stay
+    // out of the entry module's static graph so plain Node can load this bundle.
+    const refresh = import("../app/api/events/route").then(async ({ buildEventsPayload }) => {
+      const payload = await buildEventsPayload();
+      console.log(`[cron ${event.cron}] cached ${payload.count} events`);
+    });
+
+    ctx.waitUntil(refresh.catch((error) => console.error(`[cron ${event.cron}] refresh failed`, error)));
   },
 };
 

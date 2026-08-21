@@ -62,6 +62,29 @@ test("keeps live refresh, interactions, source adapters and hosting metadata", a
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
 
+  // Distances come from real coordinates, not a per-town constant.
+  assert.match(api, /distanceFromOrigin/);
+  assert.doesNotMatch(api, /function inferDistance/);
+  assert.match(page, /distancePrecision/);
+
+  // Each event's own date drives its forecast chip.
+  assert.match(page, /forecast_days=8/);
+  assert.match(page, /function forecastFor/);
+
+  // Feed text is cleaned and image-less events get an Open Graph picture.
+  assert.match(api, /resolveImages/);
+  assert.match(api, /describe\(/);
+
+  // Drawers trap focus and hand it back; the page is keyboard reachable.
+  assert.match(page, /function useModal/);
+  assert.match(page, /skip-link/);
+  assert.match(page, /aria-live="polite"/);
+
+  // Stale snapshots are labelled rather than passed off as today's listings.
+  assert.match(page, /SNAPSHOT_DATE/);
+  assert.match(page, /Live calendars are unreachable/);
+  assert.match(layout, /ErrorBoundary/);
+
   assert.match(page, /twenty-five-mile-post-clippings/);
   assert.match(page, /api\.open-meteo\.com/);
   assert.match(page, /navigator\.share/);
@@ -92,4 +115,22 @@ test("keeps live refresh, interactions, source adapters and hosting metadata", a
 
   const manifest = JSON.parse(hosting);
   assert.equal(manifest.project_id, "appgprj_6a7a45f3b30481919b110ea039820221");
+});
+
+test("warms the event cache on a schedule", async () => {
+  const [worker, viteConfig, built] = await Promise.all([
+    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
+    readFile(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(worker, /async scheduled\(/);
+  assert.match(worker, /buildEventsPayload/);
+  // Static-importing the route would drag `cloudflare:workers` into the entry
+  // graph and break loading this bundle under plain Node.
+  assert.doesNotMatch(worker, /^import \{ buildEventsPayload \}/m);
+  assert.match(viteConfig, /crons:/);
+
+  const crons = JSON.parse(built)?.triggers?.crons;
+  assert.ok(Array.isArray(crons) && crons.length > 0, "cron triggers must reach the deployed worker config");
 });
