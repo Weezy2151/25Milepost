@@ -38,3 +38,6 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+
+# local AI tooling configs (per-machine, don't sync these)
+.claude/

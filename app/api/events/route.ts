@@ -1,6 +1,9 @@
-type EventKind = "Fairs & festivals" | "Markets & food" | "Live music" | "Sports & active" | "Outdoors" | "Museums & culture" | "Community" | "Library";
+import { getCachedData, setCachedData } from "../../../db/cache";
 
-type LiveEvent = {
+type EventKind = "Fairs & festivals" | "Markets & food" | "Live music" | "Sports & active" | "Outdoors" | "Museums & culture" | "Community" | "Library";
+export type EventSetting = "indoor" | "outdoor" | "both";
+
+export type LiveEvent = {
   id: string;
   area: "southtowns" | "city";
   town: string;
@@ -21,6 +24,7 @@ type LiveEvent = {
   image?: string;
   today?: boolean;
   kind: EventKind;
+  setting: EventSetting;
   priority: number;
 };
 
@@ -133,6 +137,23 @@ function classify(title: string, description: string, source: string): EventKind
   return "Community";
 }
 
+export function inferSetting(title: string, description: string, venue: string, tags: string[], kind: EventKind): EventSetting {
+  const text = `${title} ${description} ${venue} ${tags.join(" ")} ${kind}`.toLowerCase();
+  if (/fairgrounds|depot|brewery|pavilion|museum & grounds|zoo/i.test(text)) return "both";
+  if (/library|museum|indoor|escape|play cafe|theatre|storytime|microscope|board game|lego|tinkering|sensory/i.test(text)) return "indoor";
+  if (/park|outdoor|market|farmers market|hike|trail|stadium|lawn|garden|beach|waterfront|parade|picnic|canalside|bubble day|running|bike|sports|tractor pull/i.test(text)) return "outdoor";
+  if (kind === "Library" || kind === "Museums & culture") return "indoor";
+  if (kind === "Markets & food" || kind === "Outdoors" || kind === "Sports & active") return "outdoor";
+  return "both";
+}
+
+async function fetchWithTimeout(url: string, headers: HeadersInit, timeoutMs = 4000): Promise<string> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  const response = await fetch(url, { headers, signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
+}
+
 function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[] {
   return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].flatMap((match, index) => {
     const item = match[1];
@@ -153,6 +174,10 @@ function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[
     const url = decode(textBetween(item, "link"));
     const image = decode(textBetween(item, "libcal:feat_image"));
     const time = start === "00:00:00" ? "All day" : `${formatTime(start)}${end && end !== "23:59:59" ? `–${formatTime(end)}` : ""}`;
+    const tags = [category || "Library", ...audiences.slice(0, 2)].filter(Boolean);
+    const kind = "Library" as const;
+    const setting = inferSetting(title, description, venue, tags, kind);
+
     return [{
       id: `lib-${decode(textBetween(item, "libcal:eventid")) || index}-${dateKey}`,
       area: info.area, town: info.town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey, time,
@@ -160,9 +185,9 @@ function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[
       description: description.slice(0, 220) || `${category || "Library program"} for local families.`,
       cost: `Free${registrations ? " · registration may be required" : ""}`,
       source: "Buffalo & Erie County Public Library", url, mapUrl: mapUrl(venue, info.town),
-      tags: [category || "Library", ...audiences.slice(0, 2)].filter(Boolean),
+      tags,
       accent: ["mint", "sky", "sun", "coral", "purple"][index % 5], image: image || undefined, today: dateKey === todayKey,
-      kind: "Library", priority: 1,
+      kind, setting, priority: 1,
     }];
   });
 }
@@ -213,64 +238,552 @@ function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city
     const sourceUrl = source === "Town of Orchard Park" ? "https://www.orchardparkny.gov/events/" : source === "Town of Evans" ? "https://townofevansny.gov/events/" : source === "West Seneca Recreation" ? "https://westsenecany.myrec.com/info/calendar/list.aspx" : source === "Hamburg Recreation" ? "https://www.townofhamburgny.gov/Calendar.aspx" : "https://www.buffalony.gov/calendar.aspx?CID=34&view=list";
     const url = icsValue(block, "URL") || sourceUrl;
     const kind = classify(title, description, source);
-    return [{ id: `ics-${source}-${index}-${dateKey}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"), area, town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey, time: icsTime(rawStart), title, venue, distance, description: description.slice(0, 220) || "See the official listing for event details.", cost: /\bfree\b/i.test(description) ? "Free" : "See listing", source, url, mapUrl: mapUrl(venue, town), tags: [kind, source.includes("Orchard") ? "Orchard Park" : "Community"], accent: ["coral", "sky", "mint", "sun", "purple"][index % 5], today: dateKey === todayKey, kind, priority: kind === "Community" ? 2 : 4 }];
+    const tags = [kind, source.includes("Orchard") ? "Orchard Park" : "Community"];
+    const setting = inferSetting(title, description, venue, tags, kind);
+
+    return [{
+      id: `ics-${source}-${index}-${dateKey}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      area, town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey,
+      time: icsTime(rawStart), title, venue, distance,
+      description: description.slice(0, 220) || "See the official listing for event details.",
+      cost: /\bfree\b/i.test(description) ? "Free" : "See listing",
+      source, url, mapUrl: mapUrl(venue, town),
+      tags,
+      accent: ["coral", "sky", "mint", "sun", "purple"][index % 5],
+      today: dateKey === todayKey, kind, setting,
+      priority: kind === "Community" ? 2 : 4,
+    }];
   });
 }
 
-type FeaturedInput = Omit<LiveEvent, "day" | "date" | "today" | "mapUrl" | "accent" | "priority"> & { endDateKey?: string; priority?: number };
+type RecurringTemplate = {
+  idPrefix: string;
+  dayOfWeek: number; // 0 = Sun, 1 = Mon, ..., 6 = Sat
+  monthStart?: number; // 1-12
+  monthEnd?: number; // 1-12
+  area: "southtowns" | "city";
+  town: string;
+  time: string;
+  title: string;
+  venue: string;
+  distance: number;
+  description: string;
+  cost: string;
+  source: string;
+  url: string;
+  tags: string[];
+  kind: EventKind;
+  setting: EventSetting;
+  priority: number;
+};
 
-function featuredEvents(todayKey: string, endKey: string): LiveEvent[] {
-  const items: FeaturedInput[] = [
-    { id: "erie-county-fair", area: "southtowns", town: "Hamburg", dateKey: todayKey, endDateKey: "2026-08-23", time: "11 AM–10 PM · midway noon–11", title: "Erie County Fair", venue: "Hamburg Fairgrounds · 5600 McKinley Pkwy", distance: 6, description: "The Southtowns' giant annual fair packs rides, farm animals, 4-H exhibits, food, live entertainment and special daily programs into one full-day outing.", cost: "$19 adult · 12 & under free · special-day discounts", source: "Erie County Fair", url: "https://www.ecfair.org/p/info/admissionparking", tags: ["Fair", "Rides", "Animals"], kind: "Fairs & festivals", priority: 10 },
-    { id: "destination-dinosaur", area: "city", town: "Buffalo", dateKey: todayKey, endDateKey: "2026-08-31", time: "10 AM–5 PM · shows noon & 2", title: "Destination Dinosaur", venue: "Buffalo Zoo", distance: 17, description: "Walk among life-size animatronic dinosaurs, dig for fossils and catch two educational dino shows during a flexible zoo day.", cost: "$25.95 adult · $19.95 child", source: "Buffalo Zoo", url: "https://buffalozoo.org/series/destination-dinosaur/", tags: ["Zoo", "Dinosaurs", "All day"], kind: "Museums & culture", priority: 9 },
-    { id: "hamburg-memorial-concert", area: "southtowns", town: "Hamburg", dateKey: "2026-08-12", time: "7–9 PM", title: "Summer Concert in Memorial Park", venue: "Hamburg Memorial Park", distance: 8, description: "The Village of Hamburg closes its 2026 family concert season with a free evening performance in Memorial Park.", cost: "Free", source: "Village of Hamburg", url: "https://villageofhamburgny.gov/summerconcertsinthepark", tags: ["Concert", "Family", "Outdoor"], kind: "Live music", priority: 8 },
-    { id: "op-cruise-night", area: "southtowns", town: "Orchard Park", dateKey: "2026-08-12", time: "4:30–8 PM", title: "Cruise Night at the Depot", venue: "Orchard Park BR&P Depot · 370–380 S Lincoln Ave", distance: 1, description: "Classic cars gather beside the historic train depot for an easy close-to-home evening with food available to purchase.", cost: "Free admission", source: "WNY Railway Historical Society", url: "https://www.wnyrhs.org/orchard-park-depot-events", tags: ["Classic cars", "Depot", "Local"], kind: "Community", priority: 8 },
-    { id: "op-stadium-run", area: "southtowns", town: "Orchard Park", dateKey: "2026-08-13", time: "6 PM", title: "Bills Stadium Run with Nike", venue: "Wayland Brewing · 3740 N Buffalo St", distance: 2, description: "Join a roughly five-mile community run from Wayland Brewing to the new Bills stadium and back.", cost: "See registration", source: "EverythingOP", url: "https://everythingop.com/event/bills-stadium-run-with-nike/", tags: ["Running", "Bills", "Local"], kind: "Sports & active", priority: 7 },
-    { id: "west-seneca-market-kids", area: "southtowns", town: "West Seneca", dateKey: "2026-08-13", time: "4–7 PM", title: "West Seneca Farmers Market · Kids Day", venue: "West Seneca Town Center · 1250 Union Rd", distance: 9, description: "More than 50 local vendors, produce, baked goods, dinner options, acoustic music and extra kids activities take over the Town Center lawn.", cost: "Free entry", source: "Town of West Seneca summer flyer", url: "https://www.westseneca.gov/DocumentCenter/View/760/Summer-2026-Newsletter-FINAL?bidId=", tags: ["Farmers market", "Kids Day", "Food"], kind: "Markets & food", priority: 9 },
-    { id: "hamburg-farmers-market", area: "southtowns", town: "Hamburg", dateKey: "2026-08-15", time: "7:30 AM–1 PM", title: "Hamburg Farmers Market", venue: "45 Church St · Village of Hamburg", distance: 8, description: "Shop a deep lineup of local growers and producers at this rain-or-shine Southtowns market running since 1977.", cost: "Free entry", source: "Erie Grown", url: "https://www3.erie.gov/eriegrown/eriegrown/eriegrown/growers/hamburg-farmers-market", tags: ["Farmers market", "Local food", "Rain or shine"], kind: "Markets & food", priority: 8 },
-    { id: "hamburg-midweek-market", area: "southtowns", town: "Hamburg", dateKey: "2026-08-19", time: "10 AM–2 PM", title: "Mid-Week Hamburg Farmers Market", venue: "Peace Park · 22 Buffalo St", distance: 8, description: "Restock on produce, baked goods, flowers and specialty foods at a compact family-friendly midweek market in the village.", cost: "Free entry", source: "WNY Thrive · Southtowns Regional Chamber", url: "https://www.wnythrive.com/updates/mid-week-farmers-market-819", tags: ["Farmers market", "Village", "Local food"], kind: "Markets & food", priority: 8 },
-    { id: "east-aurora-market-sat", area: "southtowns", town: "East Aurora", dateKey: "2026-08-15", time: "7 AM–1 PM", title: "East Aurora Farmers Market", venue: "115 Riley St · beside the Classic Rink", distance: 12, description: "Browse seasonal produce, meat, cheese, flowers, baked goods and other farm products from Western New York vendors.", cost: "Free entry", source: "Erie Grown", url: "https://www3.erie.gov/eriegrown/growers/east-aurora-farmers-market", tags: ["Farmers market", "Produce", "Local"], kind: "Markets & food", priority: 7 },
-    { id: "east-aurora-market-wed", area: "southtowns", town: "East Aurora", dateKey: "2026-08-12", time: "7 AM–1 PM", title: "East Aurora Farmers Market · Wednesday", venue: "115 Riley St · beside the Classic Rink", distance: 12, description: "The midweek edition offers seasonal produce, meat, cheese, flowers, baked goods and other local farm products.", cost: "Free entry", source: "Erie Grown", url: "https://www3.erie.gov/eriegrown/growers/east-aurora-farmers-market", tags: ["Farmers market", "Produce", "Local"], kind: "Markets & food", priority: 7 },
-    { id: "east-aurora-market-next-wed", area: "southtowns", town: "East Aurora", dateKey: "2026-08-19", time: "7 AM–1 PM", title: "East Aurora Farmers Market · Wednesday", venue: "115 Riley St · beside the Classic Rink", distance: 12, description: "The midweek edition offers seasonal produce, meat, cheese, flowers, baked goods and other local farm products.", cost: "Free entry", source: "Erie Grown", url: "https://www3.erie.gov/eriegrown/growers/east-aurora-farmers-market", tags: ["Farmers market", "Produce", "Local"], kind: "Markets & food", priority: 7 },
-    { id: "south-buffalo-market", area: "southtowns", town: "South Buffalo", dateKey: "2026-08-16", time: "9 AM–1 PM", title: "South Buffalo Farmers Market", venue: "Cazenovia Park Casino lawn", distance: 12, description: "Local growers and makers pair with live music, free 9:30 yoga and neighborhood bike rides for a lively Sunday market.", cost: "Free entry", source: "South Buffalo Farmers Market", url: "https://southbuffalofarmersmarket.com/visit-the-market", tags: ["Farmers market", "Music", "Yoga"], kind: "Markets & food", priority: 8 },
-    { id: "evangola-soap", area: "southtowns", town: "Lakeshore", dateKey: "2026-08-16", time: "See registration", title: "Soap Making at Evangola Nature Center", venue: "Evangola State Park · Irving", distance: 25, description: "Children 8 and older can make their own molded glycerin soap with a parent or guardian at the Lake Erie nature center.", cost: "Registration required · vehicle entry may be $7", source: "New York State Parks", url: "https://parks.ny.gov/visit/state-parks/evangola-state-park", tags: ["Nature center", "Craft", "Age 8+"], kind: "Outdoors", priority: 6 },
-    { id: "bills-preseason", area: "southtowns", town: "Orchard Park", dateKey: "2026-08-15", time: "1 PM", title: "Buffalo Bills vs. Carolina Panthers", venue: "Highmark Stadium", distance: 3, description: "The Bills open their preseason at home, putting a major live sporting event right in Orchard Park.", cost: "Ticket prices vary", source: "Buffalo Bills", url: "https://www.buffalobills.com/schedule/", tags: ["Football", "Home game", "Tickets"], kind: "Sports & active", priority: 9 },
-    { id: "op-depot-museum", area: "southtowns", town: "Orchard Park", dateKey: "2026-08-15", time: "10 AM–2 PM", title: "Orchard Park Depot Museum Open", venue: "Orchard Park BR&P Depot · 370–380 S Lincoln Ave", distance: 1, description: "Step inside Orchard Park's restored railroad depot for a close-to-home look at local transportation history.", cost: "Free admission", source: "WNY Railway Historical Society", url: "https://www.wnyrhs.org/orchard-park-depot-events", tags: ["Railroad", "Museum", "Local history"], kind: "Museums & culture", priority: 7 },
-    { id: "klocs-party-12", area: "southtowns", town: "West Seneca", dateKey: "2026-08-12", time: "5–9 PM", title: "Party in the Pavilion", venue: "Kloc's Grove · 1245 Seneca Creek Rd", distance: 9, description: "A recurring Wednesday pavilion party offers live music plus food and drinks for purchase; check the listing for the week's lineup.", cost: "See listing · no outside food or drink", source: "Greater East Aurora Chamber", url: "https://business.eanycc.com/eventcalendar/Details/rock-n-kloc-s-party-in-the-pavilion-1754955", tags: ["Live music", "Food", "Pavilion"], kind: "Live music", priority: 6 },
-    { id: "klocs-party-19", area: "southtowns", town: "West Seneca", dateKey: "2026-08-19", time: "5–9 PM", title: "Party in the Pavilion", venue: "Kloc's Grove · 1245 Seneca Creek Rd", distance: 9, description: "A recurring Wednesday pavilion party offers live music plus food and drinks for purchase; check the listing for the week's lineup.", cost: "See listing · no outside food or drink", source: "Greater East Aurora Chamber", url: "https://business.eanycc.com/eventcalendar/Details/rock-n-kloc-s-party-in-the-pavilion-1754955", tags: ["Live music", "Food", "Pavilion"], kind: "Live music", priority: 6 },
-    { id: "fair-sensory", area: "southtowns", town: "Hamburg", dateKey: "2026-08-13", time: "11 AM–2 PM", title: "Erie County Fair · Sensory Day", venue: "Hamburg Fairgrounds", distance: 6, description: "The fair reduces flashing lights, music and loud announcements for a calmer three-hour visit before regular operations resume.", cost: "Fair admission · $19 adult · 12 & under free", source: "Erie County Fair", url: "https://www.ecfair.org/p/info/admissionparking", tags: ["Sensory-friendly", "Fair", "Family"], kind: "Fairs & festivals", priority: 9 },
-    { id: "fair-tractor-pull", area: "southtowns", town: "Hamburg", dateKey: "2026-08-13", time: "5:30 PM", title: "Erie County Fair · Farm & Garden Tractor Pull", venue: "Hamburg Fairgrounds", distance: 6, description: "Farm and garden tractors take over the fair's grandstand for an evening pull rooted in local agriculture.", cost: "$10 grandstand ticket · fair admission separate", source: "Erie County Fair", url: "https://www.ecfair.org/p/info/schedule", tags: ["Tractors", "Fair", "Grandstand"], kind: "Fairs & festivals", priority: 7 },
-    { id: "fair-firefighters", area: "southtowns", town: "Hamburg", dateKey: "2026-08-14", time: "11 AM–10 PM", title: "Erie County Fair · Firefighters Day", venue: "Hamburg Fairgrounds", distance: 6, description: "Qualifying firefighters receive free admission and a food voucher while families enjoy the full fair lineup.", cost: "Firefighters free with credentials · otherwise regular admission", source: "Erie County Fair", url: "https://www.ecfair.org/p/info/admissionparking", tags: ["Fair", "Special day", "Community"], kind: "Fairs & festivals", priority: 7 },
-    { id: "fair-veterans", area: "southtowns", town: "Hamburg", dateKey: "2026-08-16", time: "11 AM–10 PM", title: "Erie County Fair · Veterans & Military Day", venue: "Hamburg Fairgrounds", distance: 6, description: "Qualifying veterans and military members receive free admission and a food voucher during a full day of fair programming.", cost: "Veterans/military free with voucher rules · otherwise regular admission", source: "Erie County Fair", url: "https://www.ecfair.org/p/info/admissionparking", tags: ["Fair", "Military", "Special day"], kind: "Fairs & festivals", priority: 7 },
-    { id: "fair-seniors", area: "southtowns", town: "Hamburg", dateKey: "2026-08-18", time: "11 AM–10 PM", title: "Erie County Fair · Senior Discount Day", venue: "Hamburg Fairgrounds", distance: 6, description: "Visitors age 62 and older receive discounted gate admission while the regular fair program continues all day.", cost: "$12 age 62+ · otherwise regular admission", source: "Erie County Fair", url: "https://www.ecfair.org/p/info/admissionparking", tags: ["Fair", "Senior discount", "Special day"], kind: "Fairs & festivals", priority: 6 },
-    { id: "fair-double-fun", area: "southtowns", town: "Hamburg", dateKey: "2026-08-19", time: "11 AM–10 PM", title: "Erie County Fair · Double Fun Day", venue: "Hamburg Fairgrounds", distance: 6, description: "Two adult admissions are bundled for a lower gate price, making a midweek fair visit easier for families and pairs.", cost: "Two adult admissions $30", source: "Erie County Fair", url: "https://www.ecfair.org/p/info/admissionparking", tags: ["Fair", "Discount", "Special day"], kind: "Fairs & festivals", priority: 6 },
-    { id: "fair-hunter-13", area: "southtowns", town: "Hamburg", dateKey: "2026-08-13", time: "See schedule", title: "Erie County Fair · Hunter Jumper Show", venue: "Horse Show Complex · Hamburg Fairgrounds", distance: 6, description: "Watch horses and riders compete in the fair's Hunter Jumper Show during a full day at the grounds.", cost: "Included with fair admission", source: "Erie County Fair", url: "https://www.ecfair.org/p/competitions/horse-shows", tags: ["Horses", "Fair", "Competition"], kind: "Fairs & festivals", priority: 7 },
-    { id: "fair-hunter-14", area: "southtowns", town: "Hamburg", dateKey: "2026-08-14", time: "See schedule", title: "Erie County Fair · Hunter Jumper Show", venue: "Horse Show Complex · Hamburg Fairgrounds", distance: 6, description: "Watch horses and riders compete in the fair's Hunter Jumper Show during a full day at the grounds.", cost: "Included with fair admission", source: "Erie County Fair", url: "https://www.ecfair.org/p/competitions/horse-shows", tags: ["Horses", "Fair", "Competition"], kind: "Fairs & festivals", priority: 7 },
-    { id: "fair-hunter-15", area: "southtowns", town: "Hamburg", dateKey: "2026-08-15", time: "See schedule", title: "Erie County Fair · Hunter Jumper Show", venue: "Horse Show Complex · Hamburg Fairgrounds", distance: 6, description: "Watch horses and riders compete in the fair's Hunter Jumper Show during a full day at the grounds.", cost: "Included with fair admission", source: "Erie County Fair", url: "https://www.ecfair.org/p/competitions/horse-shows", tags: ["Horses", "Fair", "Competition"], kind: "Fairs & festivals", priority: 7 },
-    { id: "fair-horse-pulls", area: "southtowns", town: "Hamburg", dateKey: "2026-08-16", time: "Heavy noon · light 4 PM", title: "Erie County Fair · Horse Pulls", venue: "Horse Show Complex · Hamburg Fairgrounds", distance: 6, description: "See powerful draft teams compete in heavy and light horse pulls as part of the fair's agricultural program.", cost: "Included with fair admission", source: "Erie County Fair", url: "https://www.ecfair.org/p/competitions/horse-shows", tags: ["Horses", "Fair", "Agriculture"], kind: "Fairs & festivals", priority: 8 },
-    { id: "fair-4h-17", area: "southtowns", town: "Hamburg", dateKey: "2026-08-17", time: "See schedule", title: "Erie County Fair · 4-H Horse Show", venue: "Horse Show Complex · Hamburg Fairgrounds", distance: 6, description: "Cheer on young local riders and learn about 4-H horsemanship during the fair's youth horse show.", cost: "Included with fair admission", source: "Erie County Fair", url: "https://www.ecfair.org/p/competitions/horse-shows", tags: ["4-H", "Horses", "Fair"], kind: "Fairs & festivals", priority: 7 },
-    { id: "fair-4h-18", area: "southtowns", town: "Hamburg", dateKey: "2026-08-18", time: "See schedule", title: "Erie County Fair · 4-H Horse Show", venue: "Horse Show Complex · Hamburg Fairgrounds", distance: 6, description: "Cheer on young local riders and learn about 4-H horsemanship during the fair's youth horse show.", cost: "Included with fair admission", source: "Erie County Fair", url: "https://www.ecfair.org/p/competitions/horse-shows", tags: ["4-H", "Horses", "Fair"], kind: "Fairs & festivals", priority: 7 },
-    { id: "op-farmers-market", area: "southtowns", town: "Orchard Park", dateKey: "2026-08-17", time: "4–7 PM", title: "Village of Orchard Park Farmers Market", venue: "Historic Orchard Park Train Depot · 395 S Lincoln Ave", distance: 1, description: "Local produce and community vendors gather at the depot for Orchard Park's convenient Monday evening market.", cost: "Free entry", source: "EverythingOP", url: "https://everythingop.com/series/village-of-orchard-park-farmers-market/", tags: ["Farmers market", "Local", "Depot"], kind: "Markets & food", priority: 9 },
-    { id: "canalside-kids", area: "city", town: "Buffalo", dateKey: "2026-08-14", time: "10:30 AM", title: "Canalside for Kids Walking Tour", venue: "Waterway of Change Museum · Longshed", distance: 19, description: "A guide turns waterfront history into a one-mile, stroller-friendly adventure designed for children ages 5–10.", cost: "Free · registration required", source: "Explore Buffalo", url: "https://explorebuffalo.org/waterfront/canalside-for-kids/", tags: ["Tour", "History", "Kids"], kind: "Museums & culture", priority: 7 },
-    { id: "epic-storytime-12", area: "city", town: "Buffalo", dateKey: "2026-08-12", time: "10:30 AM–12:30 PM", title: "EPIC Storytime at Canalside", venue: "Canalside Great Lawn", distance: 19, description: "Stories and extended literacy activities help children ages 0–8 and caregivers learn and play together outdoors.", cost: "Free · registration required", source: "Buffalo Waterfront", url: "https://buffalowaterfront.com/events/epic-childrens-programming", tags: ["Storytime", "Literacy", "Waterfront"], kind: "Outdoors", priority: 7 },
-    { id: "epic-storytime-19", area: "city", town: "Buffalo", dateKey: "2026-08-19", time: "10:30 AM–12:30 PM", title: "EPIC Storytime at Canalside", venue: "Canalside Great Lawn", distance: 19, description: "Stories and extended literacy activities help children ages 0–8 and caregivers learn and play together outdoors.", cost: "Free · registration required", source: "Buffalo Waterfront", url: "https://buffalowaterfront.com/events/epic-childrens-programming", tags: ["Storytime", "Literacy", "Waterfront"], kind: "Outdoors", priority: 7 },
-    { id: "free-play-friday", area: "city", town: "Buffalo", dateKey: "2026-08-14", time: "11 AM–1 PM", title: "Free Play Friday with Explore & More", venue: "Canalside · Pierce Lawn", distance: 19, description: "Explore & More brings free outdoor children's play, sports and hands-on activities to the waterfront.", cost: "Free", source: "Buffalo Waterfront", url: "https://buffalowaterfront.com/events/free-play-fridays-with-explore-more", tags: ["Play", "Kids", "Waterfront"], kind: "Outdoors", priority: 7 },
-    { id: "wild-robot", area: "city", town: "Buffalo", dateKey: "2026-08-14", time: "7–10 PM · film at sunset", title: "Family Movie Night: The Wild Robot", venue: "Prospect Park · Connecticut & Niagara", distance: 17, description: "Bring a blanket or chair for the animated family adventure under the stars, with light refreshments while supplies last.", cost: "Free", source: "Buffalo Olmsted Parks", url: "https://www.bfloparks.org/event/movie-nights/2026-08-14/", tags: ["Movie", "Outdoor", "Family"], kind: "Museums & culture", priority: 8 },
-    { id: "festival-india", area: "city", town: "Buffalo", dateKey: "2026-08-15", time: "2–8 PM", title: "Festival of India", venue: "Canalside", distance: 19, description: "Indian dance, music, food, art and community fill the waterfront at this welcoming all-ages cultural festival.", cost: "Free", source: "Buffalo Waterfront", url: "https://buffalowaterfront.com/events/festivalofindia", tags: ["Festival", "Food", "Music"], kind: "Fairs & festivals", priority: 9 },
-    { id: "urban-farm-day", area: "city", town: "Buffalo", dateKey: "2026-08-15", time: "10 AM–3 PM", title: "Urban Farm Day", venue: "20+ Buffalo urban farms", distance: 18, description: "Build a self-guided route through urban farms for tours, workshops, animals, gardens and an all-ages scavenger hunt.", cost: "Free · no tickets", source: "Gardens Buffalo Niagara", url: "https://www.gardensbuffaloniagara.com/urban-farm-day-tour", tags: ["Farms", "Tours", "Rain or shine"], kind: "Markets & food", priority: 8 },
-    { id: "carnegie-art-spree-15", area: "city", town: "Buffalo", dateKey: "2026-08-15", time: "11 AM–5 PM", title: "Carnegie Art Spree Festival", venue: "Canal Street · City of Tonawanda", distance: 25, description: "A free Erie Canal arts festival mixes juried artists, light live music, food trucks and a family scavenger hunt.", cost: "Free admission & nearby parking", source: "Carnegie Art Center", url: "https://www.carnegieartspree.org/about", tags: ["Art festival", "Music", "Food trucks"], kind: "Fairs & festivals", priority: 6 },
-    { id: "carnegie-art-spree-16", area: "city", town: "Buffalo", dateKey: "2026-08-16", time: "11 AM–5 PM", title: "Carnegie Art Spree Festival", venue: "Canal Street · City of Tonawanda", distance: 25, description: "A free Erie Canal arts festival mixes juried artists, light live music, food trucks and a family scavenger hunt.", cost: "Free admission & nearby parking", source: "Carnegie Art Center", url: "https://www.carnegieartspree.org/about", tags: ["Art festival", "Music", "Food trucks"], kind: "Fairs & festivals", priority: 6 },
-    { id: "bisons-superhero", area: "city", town: "Buffalo", dateKey: "2026-08-16", time: "6:35 PM first pitch", title: "Bisons Super Hero Night", venue: "Sahlen Field", distance: 19, description: "A family baseball night adds Marvel costume photos, a comic giveaway for early arrivals and postgame fireworks.", cost: "$22 single · $99 family pack", source: "Buffalo Bisons", url: "https://www.milb.com/buffalo/events/marvel", tags: ["Baseball", "Super heroes", "Fireworks"], kind: "Sports & active", priority: 9 },
-    { id: "levitt-la-krema", area: "city", town: "Buffalo", dateKey: "2026-08-17", time: "5–8 PM · music 5:30", title: "Levitt VIBE Buffalo · La Krema", venue: "Ralph C. Wilson Jr. Centennial Park", distance: 17, description: "Bring chairs or a picnic for a free lawn concert near the splash pad, with food trucks and community vendors.", cost: "Free", source: "Ralph Wilson Park", url: "https://rwparkbuffalo.org/levitt/", tags: ["Concert", "Picnic", "Splash pad"], kind: "Live music", priority: 8 },
-    { id: "au-some-morning", area: "city", town: "Buffalo", dateKey: "2026-08-18", time: "9:30–11:30 AM", title: "Au-Some Morning Edition", venue: "Explore & More Children's Museum", distance: 19, description: "A sensory-friendly museum morning welcomes autistic children, friends and families for calm play, art and tinkering.", cost: "Free · registration required", source: "Explore & More", url: "https://exploreandmore.org/education/au-some-evenings/", tags: ["Sensory-friendly", "Museum", "Kids"], kind: "Museums & culture", priority: 8 },
-    { id: "rock-the-block", area: "city", town: "Buffalo", dateKey: "2026-08-19", time: "5–8 PM", title: "Rock the Block", venue: "161 Vermont St · West Side", distance: 18, description: "A family block party combines food trucks, a foam party, arts and crafts, a DJ, inflatables and street hockey.", cost: "No admission price listed", source: "City of Buffalo", url: "https://www.buffalony.gov/Calendar.aspx?EID=6375", tags: ["Block party", "Food trucks", "Kids"], kind: "Community", priority: 8 },
+const RECURRING_TEMPLATES: RecurringTemplate[] = [
+  // Monday
+  {
+    idPrefix: "op-farmers-market",
+    dayOfWeek: 1,
+    monthStart: 5,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "Orchard Park",
+    time: "4–7 PM",
+    title: "Village of Orchard Park Farmers Market",
+    venue: "Historic Orchard Park Train Depot · 395 S Lincoln Ave",
+    distance: 1,
+    description: "Local produce and community vendors gather at the depot for Orchard Park's convenient Monday evening market.",
+    cost: "Free entry",
+    source: "EverythingOP",
+    url: "https://everythingop.com/series/village-of-orchard-park-farmers-market/",
+    tags: ["Farmers market", "Local", "Depot"],
+    kind: "Markets & food",
+    setting: "outdoor",
+    priority: 9,
+  },
+  {
+    idPrefix: "levitt-la-krema",
+    dayOfWeek: 1,
+    monthStart: 6,
+    monthEnd: 8,
+    area: "city",
+    town: "Buffalo",
+    time: "5–8 PM · music 5:30",
+    title: "Levitt VIBE Buffalo · Lawn Concert",
+    venue: "Ralph C. Wilson Jr. Centennial Park",
+    distance: 17,
+    description: "Bring chairs or a picnic for a free lawn concert near the splash pad, with food trucks and community vendors.",
+    cost: "Free",
+    source: "Ralph Wilson Park",
+    url: "https://rwparkbuffalo.org/levitt/",
+    tags: ["Concert", "Picnic", "Splash pad"],
+    kind: "Live music",
+    setting: "outdoor",
+    priority: 8,
+  },
+  // Tuesday
+  {
+    idPrefix: "au-some-morning",
+    dayOfWeek: 2,
+    area: "city",
+    town: "Buffalo",
+    time: "9:30–11:30 AM",
+    title: "Au-Some Morning Edition",
+    venue: "Explore & More Children's Museum",
+    distance: 19,
+    description: "A sensory-friendly museum morning welcomes autistic children, friends and families for calm play, art and tinkering.",
+    cost: "Free · registration required",
+    source: "Explore & More",
+    url: "https://exploreandmore.org/education/au-some-evenings/",
+    tags: ["Sensory-friendly", "Museum", "Kids"],
+    kind: "Museums & culture",
+    setting: "indoor",
+    priority: 8,
+  },
+  // Wednesday
+  {
+    idPrefix: "east-aurora-market-wed",
+    dayOfWeek: 3,
+    monthStart: 5,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "East Aurora",
+    time: "7 AM–1 PM",
+    title: "East Aurora Farmers Market",
+    venue: "115 Riley St · beside the Classic Rink",
+    distance: 12,
+    description: "The midweek edition offers seasonal produce, meat, cheese, flowers, baked goods and other local farm products.",
+    cost: "Free entry",
+    source: "Erie Grown",
+    url: "https://www3.erie.gov/eriegrown/growers/east-aurora-farmers-market",
+    tags: ["Farmers market", "Produce", "Local"],
+    kind: "Markets & food",
+    setting: "outdoor",
+    priority: 7,
+  },
+  {
+    idPrefix: "midweek-hamburg-market",
+    dayOfWeek: 3,
+    monthStart: 5,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "Hamburg",
+    time: "10 AM–2 PM",
+    title: "Mid-Week Hamburg Farmers Market",
+    venue: "Peace Park · 22 Buffalo St",
+    distance: 8,
+    description: "Restock on produce, baked goods, flowers and specialty foods at a compact family-friendly midweek market in the village.",
+    cost: "Free entry",
+    source: "WNY Thrive · Southtowns Regional Chamber",
+    url: "https://www.wnythrive.com/updates/mid-week-farmers-market-819",
+    tags: ["Farmers market", "Village", "Local food"],
+    kind: "Markets & food",
+    setting: "outdoor",
+    priority: 8,
+  },
+  {
+    idPrefix: "op-cruise-night",
+    dayOfWeek: 3,
+    monthStart: 5,
+    monthEnd: 9,
+    area: "southtowns",
+    town: "Orchard Park",
+    time: "4:30–8 PM",
+    title: "Cruise Night at the Depot",
+    venue: "Orchard Park BR&P Depot · 370–380 S Lincoln Ave",
+    distance: 1,
+    description: "Classic cars gather beside the historic train depot for an easy close-to-home evening with food available to purchase.",
+    cost: "Free admission",
+    source: "WNY Railway Historical Society",
+    url: "https://www.wnyrhs.org/orchard-park-depot-events",
+    tags: ["Classic cars", "Depot", "Local"],
+    kind: "Community",
+    setting: "both",
+    priority: 8,
+  },
+  {
+    idPrefix: "epic-storytime",
+    dayOfWeek: 3,
+    monthStart: 6,
+    monthEnd: 8,
+    area: "city",
+    town: "Buffalo",
+    time: "10:30 AM–12:30 PM",
+    title: "EPIC Storytime at Canalside",
+    venue: "Canalside Great Lawn",
+    distance: 19,
+    description: "Stories and extended literacy activities help children ages 0–8 and caregivers learn and play together outdoors.",
+    cost: "Free · registration required",
+    source: "Buffalo Waterfront",
+    url: "https://buffalowaterfront.com/events/epic-childrens-programming",
+    tags: ["Storytime", "Literacy", "Waterfront"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    priority: 7,
+  },
+  // Thursday
+  {
+    idPrefix: "west-seneca-market",
+    dayOfWeek: 4,
+    monthStart: 5,
+    monthEnd: 9,
+    area: "southtowns",
+    town: "West Seneca",
+    time: "4–7 PM",
+    title: "West Seneca Farmers Market · Kids Day",
+    venue: "West Seneca Town Center · 1250 Union Rd",
+    distance: 9,
+    description: "More than 50 local vendors, produce, baked goods, dinner options, acoustic music and extra kids activities take over the Town Center lawn.",
+    cost: "Free entry",
+    source: "Town of West Seneca summer flyer",
+    url: "https://www.westseneca.gov/DocumentCenter/View/760/Summer-2026-Newsletter-FINAL?bidId=",
+    tags: ["Farmers market", "Kids Day", "Food"],
+    kind: "Markets & food",
+    setting: "outdoor",
+    priority: 9,
+  },
+  {
+    idPrefix: "op-stadium-run",
+    dayOfWeek: 4,
+    area: "southtowns",
+    town: "Orchard Park",
+    time: "6 PM",
+    title: "Bills Stadium Run with Nike",
+    venue: "Wayland Brewing · 3740 N Buffalo St",
+    distance: 2,
+    description: "Join a roughly five-mile community run from Wayland Brewing to the new Bills stadium and back.",
+    cost: "See registration",
+    source: "EverythingOP",
+    url: "https://everythingop.com/event/bills-stadium-run-with-nike/",
+    tags: ["Running", "Bills", "Local"],
+    kind: "Sports & active",
+    setting: "outdoor",
+    priority: 7,
+  },
+  // Friday
+  {
+    idPrefix: "canalside-kids",
+    dayOfWeek: 5,
+    monthStart: 6,
+    monthEnd: 8,
+    area: "city",
+    town: "Buffalo",
+    time: "10:30 AM",
+    title: "Canalside for Kids Walking Tour",
+    venue: "Waterway of Change Museum · Longshed",
+    distance: 19,
+    description: "A guide turns waterfront history into a one-mile, stroller-friendly adventure designed for children ages 5–10.",
+    cost: "Free · registration required",
+    source: "Explore Buffalo",
+    url: "https://explorebuffalo.org/waterfront/canalside-for-kids/",
+    tags: ["Tour", "History", "Kids"],
+    kind: "Museums & culture",
+    setting: "outdoor",
+    priority: 7,
+  },
+  {
+    idPrefix: "free-play-friday",
+    dayOfWeek: 5,
+    monthStart: 6,
+    monthEnd: 8,
+    area: "city",
+    town: "Buffalo",
+    time: "11 AM–1 PM",
+    title: "Free Play Friday with Explore & More",
+    venue: "Canalside · Pierce Lawn",
+    distance: 19,
+    description: "Explore & More brings free outdoor children's play, sports and hands-on activities to the waterfront.",
+    cost: "Free",
+    source: "Buffalo Waterfront",
+    url: "https://buffalowaterfront.com/events/free-play-fridays-with-explore-more",
+    tags: ["Play", "Kids", "Waterfront"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    priority: 7,
+  },
+  {
+    idPrefix: "wild-robot",
+    dayOfWeek: 5,
+    monthStart: 6,
+    monthEnd: 8,
+    area: "city",
+    town: "Buffalo",
+    time: "7–10 PM · film at sunset",
+    title: "Family Movie Night: The Wild Robot",
+    venue: "Prospect Park · Connecticut & Niagara",
+    distance: 17,
+    description: "Bring a blanket or chair for the animated family adventure under the stars, with light refreshments while supplies last.",
+    cost: "Free",
+    source: "Buffalo Olmsted Parks",
+    url: "https://www.bfloparks.org/event/movie-nights/2026-08-14/",
+    tags: ["Movie", "Outdoor", "Family"],
+    kind: "Museums & culture",
+    setting: "outdoor",
+    priority: 8,
+  },
+  // Saturday
+  {
+    idPrefix: "hamburg-farmers-market",
+    dayOfWeek: 6,
+    monthStart: 5,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "Hamburg",
+    time: "7:30 AM–1 PM",
+    title: "Hamburg Farmers Market",
+    venue: "45 Church St · Village of Hamburg",
+    distance: 8,
+    description: "Shop a deep lineup of local growers and producers at this rain-or-shine Southtowns market running since 1977.",
+    cost: "Free entry",
+    source: "Erie Grown",
+    url: "https://www3.erie.gov/eriegrown/eriegrown/eriegrown/growers/hamburg-farmers-market",
+    tags: ["Farmers market", "Local food", "Rain or shine"],
+    kind: "Markets & food",
+    setting: "outdoor",
+    priority: 8,
+  },
+  {
+    idPrefix: "east-aurora-market-sat",
+    dayOfWeek: 6,
+    monthStart: 5,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "East Aurora",
+    time: "7 AM–1 PM",
+    title: "East Aurora Farmers Market",
+    venue: "115 Riley St · beside the Classic Rink",
+    distance: 12,
+    description: "Browse seasonal produce, meat, cheese, flowers, baked goods and other farm products from Western New York vendors.",
+    cost: "Free entry",
+    source: "Erie Grown",
+    url: "https://www3.erie.gov/eriegrown/growers/east-aurora-farmers-market",
+    tags: ["Farmers market", "Produce", "Local"],
+    kind: "Markets & food",
+    setting: "outdoor",
+    priority: 7,
+  },
+  {
+    idPrefix: "op-depot-museum",
+    dayOfWeek: 6,
+    area: "southtowns",
+    town: "Orchard Park",
+    time: "10 AM–2 PM",
+    title: "Orchard Park Depot Museum Open",
+    venue: "Orchard Park BR&P Depot · 370–380 S Lincoln Ave",
+    distance: 1,
+    description: "Step inside Orchard Park's restored railroad depot for a close-to-home look at local transportation history.",
+    cost: "Free admission",
+    source: "WNY Railway Historical Society",
+    url: "https://www.wnyrhs.org/orchard-park-depot-events",
+    tags: ["Railroad", "Museum", "Local history"],
+    kind: "Museums & culture",
+    setting: "indoor",
+    priority: 7,
+  },
+  // Sunday
+  {
+    idPrefix: "south-buffalo-market",
+    dayOfWeek: 0,
+    monthStart: 6,
+    monthEnd: 9,
+    area: "southtowns",
+    town: "South Buffalo",
+    time: "9 AM–1 PM",
+    title: "South Buffalo Farmers Market",
+    venue: "Cazenovia Park Casino lawn",
+    distance: 12,
+    description: "Local growers and makers pair with live music, free 9:30 yoga and neighborhood bike rides for a lively Sunday market.",
+    cost: "Free entry",
+    source: "South Buffalo Farmers Market",
+    url: "https://southbuffalofarmersmarket.com/visit-the-market",
+    tags: ["Farmers market", "Music", "Yoga"],
+    kind: "Markets & food",
+    setting: "outdoor",
+    priority: 8,
+  },
+  {
+    idPrefix: "bisons-game",
+    dayOfWeek: 0,
+    monthStart: 4,
+    monthEnd: 9,
+    area: "city",
+    town: "Buffalo",
+    time: "6:35 PM first pitch",
+    title: "Bisons Super Hero Night",
+    venue: "Sahlen Field",
+    distance: 19,
+    description: "A family baseball night adds Marvel costume photos, a comic giveaway for early arrivals and postgame fireworks.",
+    cost: "$22 single · $99 family pack",
+    source: "Buffalo Bisons",
+    url: "https://www.milb.com/buffalo/events/marvel",
+    tags: ["Baseball", "Super heroes", "Fireworks"],
+    kind: "Sports & active",
+    setting: "outdoor",
+    priority: 9,
+  },
+];
+
+type SpecificFeatured = {
+  id: string;
+  area: "southtowns" | "city";
+  town: string;
+  dateKey: string;
+  endDateKey?: string;
+  time: string;
+  title: string;
+  venue: string;
+  distance: number;
+  description: string;
+  cost: string;
+  source: string;
+  url: string;
+  tags: string[];
+  kind: EventKind;
+  setting: EventSetting;
+  priority: number;
+};
+
+function generateDynamicRecurringEvents(todayKey: string, endKey: string): LiveEvent[] {
+  const events: LiveEvent[] = [];
+  let current = todayKey;
+  let dayOffset = 0;
+
+  while (current <= endKey) {
+    const d = new Date(`${current}T12:00:00Z`);
+    const dayOfWeek = d.getUTCDay();
+    const month = d.getUTCMonth() + 1;
+
+    for (const template of RECURRING_TEMPLATES) {
+      if (template.dayOfWeek === dayOfWeek) {
+        if (template.monthStart && template.monthEnd) {
+          if (month < template.monthStart || month > template.monthEnd) continue;
+        }
+
+        const date = formatDate(current);
+        const day = dayLabel(current, todayKey);
+        events.push({
+          id: `${template.idPrefix}-${current}`,
+          area: template.area,
+          town: template.town,
+          day,
+          date,
+          dateKey: current,
+          time: template.time,
+          title: template.title,
+          venue: template.venue,
+          distance: template.distance,
+          description: template.description,
+          cost: template.cost,
+          source: template.source,
+          url: template.url,
+          mapUrl: mapUrl(template.venue, template.town),
+          tags: template.tags,
+          accent: ["coral", "sun", "mint", "sky", "purple"][(events.length + dayOffset) % 5],
+          today: current === todayKey,
+          kind: template.kind,
+          setting: template.setting,
+          priority: template.priority,
+        });
+      }
+    }
+
+    current = addDays(current, 1);
+    dayOffset++;
+  }
+
+  return events;
+}
+
+function featuredMajorEvents(todayKey: string, endKey: string): LiveEvent[] {
+  const specific: SpecificFeatured[] = [
+    {
+      id: "erie-county-fair",
+      area: "southtowns",
+      town: "Hamburg",
+      dateKey: todayKey,
+      endDateKey: "2026-08-23",
+      time: "11 AM–10 PM · midway noon–11",
+      title: "Erie County Fair",
+      venue: "Hamburg Fairgrounds · 5600 McKinley Pkwy",
+      distance: 6,
+      description: "The Southtowns' giant annual fair packs rides, farm animals, 4-H exhibits, food, live entertainment and special daily programs into one full-day outing.",
+      cost: "$19 adult · 12 & under free · special-day discounts",
+      source: "Erie County Fair",
+      url: "https://www.ecfair.org/p/info/admissionparking",
+      tags: ["Fair", "Rides", "Animals"],
+      kind: "Fairs & festivals",
+      setting: "both",
+      priority: 10,
+    },
+    {
+      id: "destination-dinosaur",
+      area: "city",
+      town: "Buffalo",
+      dateKey: todayKey,
+      endDateKey: "2026-08-31",
+      time: "10 AM–5 PM · shows noon & 2",
+      title: "Destination Dinosaur",
+      venue: "Buffalo Zoo",
+      distance: 17,
+      description: "Walk among life-size animatronic dinosaurs, dig for fossils and catch two educational dino shows during a flexible zoo day.",
+      cost: "$25.95 adult · $19.95 child",
+      source: "Buffalo Zoo",
+      url: "https://buffalozoo.org/series/destination-dinosaur/",
+      tags: ["Zoo", "Dinosaurs", "All day"],
+      kind: "Museums & culture",
+      setting: "both",
+      priority: 9,
+    },
+    {
+      id: "bills-preseason",
+      area: "southtowns",
+      town: "Orchard Park",
+      dateKey: "2026-08-15",
+      time: "1 PM",
+      title: "Buffalo Bills vs. Carolina Panthers",
+      venue: "Highmark Stadium",
+      distance: 3,
+      description: "The Bills open their preseason at home, putting a major live sporting event right in Orchard Park.",
+      cost: "Ticket prices vary",
+      source: "Buffalo Bills",
+      url: "https://www.buffalobs.com/schedule/",
+      tags: ["Football", "Home game", "Tickets"],
+      kind: "Sports & active",
+      setting: "outdoor",
+      priority: 9,
+    },
+    {
+      id: "festival-india",
+      area: "city",
+      town: "Buffalo",
+      dateKey: "2026-08-15",
+      time: "2–8 PM",
+      title: "Festival of India",
+      venue: "Canalside",
+      distance: 19,
+      description: "Indian dance, music, food, art and community fill the waterfront at this welcoming all-ages cultural festival.",
+      cost: "Free",
+      source: "Buffalo Waterfront",
+      url: "https://buffalowaterfront.com/events/festivalofindia",
+      tags: ["Festival", "Food", "Music"],
+      kind: "Fairs & festivals",
+      setting: "outdoor",
+      priority: 9,
+    },
   ];
-  return items.flatMap((item, index) => {
+
+  return specific.flatMap((item, index) => {
     const activeEnd = item.endDateKey ?? item.dateKey;
     if (activeEnd < todayKey || item.dateKey > endKey) return [];
     const dateKey = item.dateKey < todayKey ? todayKey : item.dateKey;
     const date = item.endDateKey ? `${formatDate(dateKey)}–${formatDate(item.endDateKey)}` : formatDate(dateKey);
-    return [{ ...item, dateKey, date, day: dayLabel(dateKey, todayKey), today: dateKey === todayKey, mapUrl: mapUrl(item.venue, item.town), accent: ["coral", "sun", "mint", "sky", "purple"][index % 5], priority: item.priority ?? 6 }];
+    return [{
+      ...item,
+      dateKey,
+      date,
+      day: dayLabel(dateKey, todayKey),
+      today: dateKey === todayKey,
+      mapUrl: mapUrl(item.venue, item.town),
+      accent: ["coral", "sun", "mint", "sky", "purple"][index % 5],
+    }];
   });
 }
 
@@ -304,10 +817,46 @@ function dedupe(events: LiveEvent[]) {
 export async function GET() {
   const todayKey = localDateKey();
   const endKey = addDays(todayKey, 7);
+  const cacheKey = `events:balanced-v2:${todayKey}`;
+
+  // 1. Check D1 / Memory cache
+  try {
+    const cached = await getCachedData<{
+      events: LiveEvent[];
+      count: number;
+      updatedAt: string;
+      window: { from: string; to: string };
+      sources: Array<{ name: string; ok: boolean }>;
+      mix: Record<string, number>;
+    }>(cacheKey);
+
+    if (cached && Array.isArray(cached.events) && cached.events.length > 0) {
+      return Response.json(cached, {
+        headers: {
+          "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
+          "X-Cache": "HIT",
+        },
+      });
+    }
+  } catch {
+    // Cache lookup failed, continue with live fetch
+  }
+
+  // 2. Fetch live feeds with timeouts
   const requests = [
-    ...LIBRARY_FEEDS.map(async ([name, url]) => ({ name, kind: "library" as const, text: await fetch(url, { headers: { "user-agent": "The 25-Mile Post family event index" } }).then((response) => { if (!response.ok) throw new Error(`${response.status}`); return response.text(); }) })),
-    ...ICS_FEEDS.map(async ([name, url, area]) => ({ name, kind: "ics" as const, area: area as "southtowns" | "city", text: await fetch(url, { headers: { "user-agent": "The 25-Mile Post family event index" } }).then((response) => { if (!response.ok) throw new Error(`${response.status}`); return response.text(); }) })),
+    ...LIBRARY_FEEDS.map(async ([name, url]) => ({
+      name,
+      kind: "library" as const,
+      text: await fetchWithTimeout(url, { "user-agent": "The 25-Mile Post family event index" }, 4000),
+    })),
+    ...ICS_FEEDS.map(async ([name, url, area]) => ({
+      name,
+      kind: "ics" as const,
+      area: area as "southtowns" | "city",
+      text: await fetchWithTimeout(url, { "user-agent": "The 25-Mile Post family event index" }, 4000),
+    })),
   ];
+
   const settled = await Promise.allSettled(requests);
   const events: LiveEvent[] = [];
   const sources = settled.map((result) => {
@@ -316,7 +865,43 @@ export async function GET() {
     else events.push(...parseIcs(result.value.text, result.value.name, result.value.area, todayKey, endKey));
     return { name: result.value.name, ok: true };
   });
-  const normalized = capLibraries(dedupe([...featuredEvents(todayKey, endKey), ...events])).sort((a, b) => a.dateKey.localeCompare(b.dateKey) || b.priority - a.priority || a.distance - b.distance || a.time.localeCompare(b.time));
-  const mix = Object.fromEntries([...new Set(normalized.map((event) => event.kind))].map((kind) => [kind, normalized.filter((event) => event.kind === kind).length]));
-  return Response.json({ events: normalized, count: normalized.length, updatedAt: new Date().toISOString(), window: { from: todayKey, to: endKey }, sources, mix }, { headers: { "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400" } });
+
+  // 3. Merge dynamic recurring events, major featured attractions, and live feeds
+  const recurring = generateDynamicRecurringEvents(todayKey, endKey);
+  const major = featuredMajorEvents(todayKey, endKey);
+  const allEvents = [...major, ...recurring, ...events];
+
+  const normalized = capLibraries(dedupe(allEvents)).sort(
+    (a, b) => a.dateKey.localeCompare(b.dateKey) || b.priority - a.priority || a.distance - b.distance || a.time.localeCompare(b.time)
+  );
+
+  const mix = Object.fromEntries(
+    [...new Set(normalized.map((event) => event.kind))].map((kind) => [
+      kind,
+      normalized.filter((event) => event.kind === kind).length,
+    ])
+  );
+
+  const payload = {
+    events: normalized,
+    count: normalized.length,
+    updatedAt: new Date().toISOString(),
+    window: { from: todayKey, to: endKey },
+    sources,
+    mix,
+  };
+
+  // 4. Save to D1 / Memory cache with 1-hour TTL
+  try {
+    await setCachedData(cacheKey, payload, 3600);
+  } catch {
+    // Cache write error ignored
+  }
+
+  return Response.json(payload, {
+    headers: {
+      "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
+      "X-Cache": "MISS",
+    },
+  });
 }
