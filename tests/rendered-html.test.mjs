@@ -35,21 +35,28 @@ test("server-renders the dynamic events finder with a last-known snapshot", asyn
   assert.doesNotMatch(html, /Fossil Frenzy Play Cafe/);
   assert.match(html, /Erie County Fair/);
   assert.doesNotMatch(html, /Au-Some Morning Edition/);
-  assert.match(html, /Loading this morning’s edition/);
+  assert.match(html, /Happening today/);
+  assert.match(html, /Next seven days/);
   assert.match(html, /Southtowns/);
-  assert.match(html, /Buffalo city/);
+  assert.match(html, /All nearby/);
   assert.match(html, /Town of Orchard Park/);
   assert.match(html, /Town of Hamburg/);
   assert.match(html, /Orchard Park Bee/);
   assert.match(html, /Hamburg Sun/);
   assert.doesNotMatch(html, /Tuesday, August 11, 2026|Movie in the Park: Tangled|Teen Game Night|Delaware Park Flow Jam/);
 
-  assert.equal((html.match(/<article class="event-card/g) ?? []).length, 8);
+  // The greeting and any stored itinerary resolve after mount, so the server
+  // markup must stay time- and storage-independent.
+  assert.match(html, /Hello, Orchard Park\./);
+  assert.doesNotMatch(html, /Good (morning|afternoon|evening), Orchard Park/);
+
+  assert.equal((html.match(/<article class="card /g) ?? []).length, 8);
 });
 
 test("keeps live refresh, interactions, source adapters and hosting metadata", async () => {
-  const [page, api, layout, hosting] = await Promise.all([
+  const [page, data, api, layout, hosting] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/events-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/events/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
@@ -61,12 +68,16 @@ test("keeps live refresh, interactions, source adapters and hosting metadata", a
   assert.match(page, /fetch\("\/api\/events\?edition=balanced-v2"/);
   assert.doesNotMatch(page, /setInterval/);
   assert.match(page, /refreshed each morning/);
-  assert.match(page, /What sounds good/);
+  assert.match(page, /Museums & culture/);
   assert.match(page, /setTown/);
   assert.match(page, /setQuery/);
   assert.match(page, /setShowSaved/);
   assert.match(page, /Southtowns/);
-  assert.match(page, /Destination Dinosaur/);
+  assert.match(data, /Destination Dinosaur/);
+
+  // Saved events, the My Day itinerary and the theme all persist per device.
+  assert.match(page, /twenty-five-mile-post-myday/);
+  assert.match(page, /twenty-five-mile-post-theme/);
   assert.match(api, /buffalolib\.libcal\.com\/rss\.php/);
   assert.match(api, /orchardparkny\.gov\/events/);
   assert.match(api, /iCalendar\.aspx/);
@@ -75,7 +86,7 @@ test("keeps live refresh, interactions, source adapters and hosting metadata", a
   assert.match(api, /s-maxage=86400/);
   assert.match(api, /West Seneca Farmers Market/);
   assert.match(api, /stale-while-revalidate/);
-  assert.match(page, /Buffalo city/);
+  assert.match(page, /All nearby/);
   assert.match(layout, /The 25-Mile Post \| Family Things To Do Near Orchard Park/);
   assert.match(layout, /images: \[\{ url: imageUrl/);
 

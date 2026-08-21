@@ -31,9 +31,21 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
+// Applies the saved theme before first paint so the page never flashes the wrong palette.
+const themeBoot = `try{var t=localStorage.getItem("twenty-five-mile-post-theme");if(t==="dark"||t==="light")document.documentElement.setAttribute("data-theme",t)}catch(e){}`;
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+        />
+        <script dangerouslySetInnerHTML={{ __html: themeBoot }} />
+      </head>
       <body>{children}</body>
     </html>
   );
