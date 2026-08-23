@@ -3,14 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type SVGProps } from "react";
 import {
   fallbackEvents,
-  preferredTowns,
   SNAPSHOT_DATE,
   type EventKind,
   type EventPick,
   type SettingFilter,
   type Sort,
   type Vibe,
-  type View,
 } from "./events-data";
 
 /* ------------------------------------------------------------------ icons */
@@ -75,6 +73,11 @@ function weatherLabel(code: number) {
 /** Only "Free…" with no dollar figure counts — "12 & under free" still has a ticket price. */
 function isFree(cost: string) {
   return /^\s*free/i.test(cost) && !cost.includes("$");
+}
+
+/** Rough drive time from Orchard Park — a mix of village roads and highway, ~32 mph average. */
+function driveMinutes(distance: number) {
+  return Math.max(5, Math.round((distance / 32) * 60));
 }
 
 function settingLabel(setting?: EventPick["setting"]) {
@@ -262,7 +265,7 @@ function EventCard({
           <span className={event.today ? "flag today" : "flag"}>{event.day}</span>
           <span className="flag" title={event.distancePrecision === "town" ? `Approximate — measured from the centre of ${event.town}` : undefined}>
             {event.distancePrecision === "town" || event.distancePrecision === "region" ? "~" : ""}
-            {event.distance} mi
+            {event.distance} mi · ~{driveMinutes(event.distance)} min
           </span>
         </span>
       </button>
@@ -379,12 +382,12 @@ export default function Home() {
     total: 0,
   });
 
-  const [view, setView] = useState<View>("southtowns");
   const [kind, setKind] = useState<EventKind>("All activities");
   const [setting, setSetting] = useState<SettingFilter>("all");
   const [vibe, setVibe] = useState<Vibe>("all");
   const [maxDistance, setMaxDistance] = useState<number | null>(null);
-  const [town, setTown] = useState("All towns");
+  /** null = "today" (whichever day the current event set flags as today). */
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [sort, setSort] = useState<Sort>("recommended");
   const [query, setQuery] = useState("");
   const [showSaved, setShowSaved] = useState(false);
@@ -495,11 +498,11 @@ export default function Home() {
     return true;
   }, []);
 
-  const filtered = useMemo(() => {
+  // Every filter except which day is selected — used both for the results list
+  // and to count how many events each day tab would show.
+  const baseFiltered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const list = events.filter((event) => {
-      if (view !== "all" && event.area !== view) return false;
-      if (town !== "All towns" && event.town !== town && !(town === "Lakeshore" && event.town.includes("Lakeshore"))) return false;
       if (kind !== "All activities" && event.kind !== kind && !(!event.kind && event.tags.includes(kind))) return false;
       if (setting !== "all" && event.setting !== setting && event.setting !== "both" && event.setting) return false;
       if (maxDistance !== null && event.distance > maxDistance) return false;
@@ -513,27 +516,30 @@ export default function Home() {
     });
     if (sort === "closest") return [...list].sort((a, b) => a.distance - b.distance);
     return list;
-  }, [events, view, town, kind, setting, maxDistance, vibe, showSaved, saved, query, sort, matchesVibe]);
+  }, [events, kind, setting, maxDistance, vibe, showSaved, saved, query, sort, matchesVibe]);
 
-  const today = useMemo(() => filtered.filter((event) => event.today), [filtered]);
-  const upcoming = useMemo(() => filtered.filter((event) => !event.today), [filtered]);
-
-  const upcomingByDay = useMemo(() => {
-    const groups = new Map<string, EventPick[]>();
-    for (const event of upcoming) {
-      const key = event.date || event.day;
-      const bucket = groups.get(key);
-      if (bucket) bucket.push(event);
-      else groups.set(key, [event]);
+  /** The week's days in order, one tile per distinct date the current event set covers. */
+  const days = useMemo(() => {
+    const seen = new Map<string, { dateKey: string; day: string; date: string }>();
+    for (const event of events) {
+      if (event.dateKey && !seen.has(event.dateKey)) seen.set(event.dateKey, { dateKey: event.dateKey, day: event.day, date: event.date });
     }
-    return [...groups.entries()];
-  }, [upcoming]);
-
-  const townOptions = useMemo(() => {
-    const found = new Set(events.map((event) => event.town));
-    const ordered = [...preferredTowns.filter((name) => found.has(name)), ...[...found].filter((name) => !preferredTowns.includes(name)).sort()];
-    return [{ value: "All towns", label: "All towns" }, ...ordered.map((name) => ({ value: name, label: name }))];
+    return [...seen.values()].sort((a, b) => a.dateKey.localeCompare(b.dateKey)).slice(0, 8);
   }, [events]);
+
+  const todayKey = useMemo(() => events.find((event) => event.today)?.dateKey ?? days[0]?.dateKey ?? "", [events, days]);
+  const activeDay = selectedDay ?? todayKey;
+
+  const dayCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const event of baseFiltered) {
+      if (!event.dateKey) continue;
+      counts.set(event.dateKey, (counts.get(event.dateKey) ?? 0) + 1);
+    }
+    return counts;
+  }, [baseFiltered]);
+
+  const filtered = useMemo(() => baseFiltered.filter((event) => event.dateKey === activeDay), [baseFiltered, activeDay]);
 
   const spotlight = useMemo(() => events.filter((event) => (event.priority ?? 0) >= 8).slice(0, 3), [events]);
 
@@ -542,18 +548,16 @@ export default function Home() {
   const activeFilters = useMemo(() => {
     const list: { key: string; label: string; clear: () => void }[] = [];
     if (vibe !== "all") list.push({ key: "vibe", label: moodLabel(vibe), clear: () => setVibe("all") });
-    if (town !== "All towns") list.push({ key: "town", label: town, clear: () => setTown("All towns") });
     if (kind !== "All activities") list.push({ key: "kind", label: kind, clear: () => setKind("All activities") });
     if (setting !== "all") list.push({ key: "setting", label: setting === "indoor" ? "Indoor" : "Outdoor", clear: () => setSetting("all") });
     if (maxDistance !== null) list.push({ key: "distance", label: `Within ${maxDistance} mi`, clear: () => setMaxDistance(null) });
     if (showSaved) list.push({ key: "saved", label: "Saved only", clear: () => setShowSaved(false) });
     if (query.trim()) list.push({ key: "query", label: `“${query.trim()}”`, clear: () => setQuery("") });
     return list;
-  }, [vibe, town, kind, setting, maxDistance, showSaved, query]);
+  }, [vibe, kind, setting, maxDistance, showSaved, query]);
 
   const clearAll = () => {
     setVibe("all");
-    setTown("All towns");
     setKind("All activities");
     setSetting("all");
     setMaxDistance(null);
@@ -561,9 +565,12 @@ export default function Home() {
     setQuery("");
   };
 
-  const showSpotlight = spotlight.length > 0 && activeFilters.length === 0;
-  const freeToday = today.filter((event) => isFree(event.cost)).length;
-  const closeToday = today.filter((event) => event.distance <= 5).length;
+  const showSpotlight = spotlight.length > 0 && activeFilters.length === 0 && activeDay === todayKey;
+  const activeDayMeta = days.find((day) => day.dateKey === activeDay);
+  const todayEvents = useMemo(() => baseFiltered.filter((event) => event.dateKey === todayKey), [baseFiltered, todayKey]);
+  const todayCount = todayEvents.length;
+  const freeToday = todayEvents.filter((event) => isFree(event.cost)).length;
+  const closeToday = todayEvents.filter((event) => event.distance <= 5).length;
   const rainLikely = weather !== null && weather.rain >= 40;
 
   /* ---- actions ---- */
@@ -656,7 +663,7 @@ export default function Home() {
 
       {/* Filtering is instant and silent for sighted users; announce it for the rest. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {`${filtered.length} ${filtered.length === 1 ? "event" : "events"} match your filters, ${today.length} today.`}
+        {`${filtered.length} ${filtered.length === 1 ? "event" : "events"} match your filters for the selected day, ${todayCount} today.`}
       </p>
 
       <header className="topbar">
@@ -798,7 +805,7 @@ export default function Home() {
 
               <div className="glance">
                 <div className="glance-cell">
-                  <b>{today.length}</b>
+                  <b>{todayCount}</b>
                   <span>Today</span>
                 </div>
                 <div className="glance-cell">
@@ -859,19 +866,29 @@ export default function Home() {
           )}
         </section>
 
+        {/* ------------------------------------------------------- day picker */}
+        <section className="wrap daypicker-wrap" aria-label="Choose a day">
+          <p className="daypicker-label">Pick a day this week</p>
+          <div className="daypicker" role="group" aria-label="Day of the week">
+            {days.map((day) => (
+              <button
+                key={day.dateKey}
+                type="button"
+                className="daypicker-btn"
+                aria-pressed={day.dateKey === activeDay}
+                onClick={() => setSelectedDay(day.dateKey)}
+              >
+                <b>{day.day === "TODAY" || day.day === "TOMORROW" ? day.day : day.day.slice(0, 3)}</b>
+                <span>{day.date.replace(/^[A-Za-z]+,\s*/, "")}</span>
+                <em>{dayCounts.get(day.dateKey) ?? 0}</em>
+              </button>
+            ))}
+          </div>
+        </section>
+
         {/* ----------------------------------------------------- filter bar */}
         <div className="filterbar">
           <div className="wrap filterbar-inner">
-            <div className="segmented" role="group" aria-label="Choose area">
-              {(["southtowns", "city", "all"] as View[]).map((option) => (
-                <button key={option} type="button" aria-pressed={view === option} onClick={() => setView(option)}>
-                  {option === "southtowns" ? "Southtowns" : option === "city" ? "Buffalo" : "All nearby"}
-                </button>
-              ))}
-            </div>
-
-            <span className="divider-v" />
-
             <button
               type="button"
               className={activeFilters.length ? "fmenu-btn on filters-mobile" : "fmenu-btn filters-mobile"}
@@ -883,25 +900,24 @@ export default function Home() {
             </button>
 
             <div className="filters-desktop">
-            <FilterMenu label="Town" defaultValue="All towns" selected={town} options={townOptions} onSelect={setTown} />
+            <FilterMenu
+              label="Drive time"
+              defaultValue="any"
+              selected={maxDistance === null ? "any" : String(maxDistance)}
+              options={[
+                { value: "any", label: `Up to 25 mi · ~${driveMinutes(25)} min` },
+                { value: "5", label: `Up to 5 mi · ~${driveMinutes(5)} min` },
+                { value: "10", label: `Up to 10 mi · ~${driveMinutes(10)} min` },
+                { value: "15", label: `Up to 15 mi · ~${driveMinutes(15)} min` },
+              ]}
+              onSelect={(value) => setMaxDistance(value === "any" ? null : Number(value))}
+            />
             <FilterMenu
               label="Activity"
               defaultValue="All activities"
               selected={kind}
               options={KIND_OPTIONS.map((option) => ({ value: option, label: option }))}
               onSelect={(value) => setKind(value as EventKind)}
-            />
-            <FilterMenu
-              label="Within"
-              defaultValue="any"
-              selected={maxDistance === null ? "any" : String(maxDistance)}
-              options={[
-                { value: "any", label: "25 miles" },
-                { value: "5", label: "5 miles" },
-                { value: "10", label: "10 miles" },
-                { value: "15", label: "15 miles" },
-              ]}
-              onSelect={(value) => setMaxDistance(value === "any" ? null : Number(value))}
             />
             <FilterMenu
               label="Setting"
@@ -997,14 +1013,16 @@ export default function Home() {
         )}
 
         {/* -------------------------------------------------------- results */}
-        <section className="wrap section" id="results" aria-label="Events today">
+        <section className="wrap section" id="results" aria-label={`Events on ${activeDayMeta?.date ?? "the selected day"}`}>
           <div className="section-head">
             <div>
-              <p className="eyebrow">{view === "southtowns" ? "Southtowns first" : view === "city" ? "Buffalo city" : "Everything within 25 miles"}</p>
-              <h2 className="display">Happening today</h2>
+              <p className="eyebrow">{activeDay === todayKey ? "Today" : "Plan ahead"}</p>
+              <h2 className="display">
+                {activeDayMeta ? (activeDayMeta.day === "TODAY" || activeDayMeta.day === "TOMORROW" ? activeDayMeta.day[0] + activeDayMeta.day.slice(1).toLowerCase() : activeDayMeta.date) : "This week"}
+              </h2>
             </div>
             <p className="count">
-              {today.length} {today.length === 1 ? "event" : "events"}
+              {filtered.length} {filtered.length === 1 ? "event" : "events"}
             </p>
           </div>
 
@@ -1014,60 +1032,28 @@ export default function Home() {
                 <SkeletonCard key={index} />
               ))}
             </div>
-          ) : today.length ? (
+          ) : filtered.length ? (
             <div className="grid">
-              {today.map((event) => (
+              {filtered.map((event) => (
                 <EventCard key={event.id} {...cardProps(event)} />
               ))}
             </div>
           ) : (
             <div className="empty">
-              <h3>Nothing today matches those filters</h3>
-              <p>There are still {upcoming.length} events coming up this week. Widen the search or clear what&rsquo;s applied.</p>
-              {activeFilters.length > 0 && (
-                <button type="button" className="btn-solid" onClick={clearAll}>
+              <h3>Nothing that day matches those filters</h3>
+              <p>Try another day above, widen the drive-time radius, or clear what&rsquo;s applied.</p>
+              {(activeFilters.length > 0 || selectedDay !== null) && (
+                <button
+                  type="button"
+                  className="btn-solid"
+                  onClick={() => {
+                    clearAll();
+                    setSelectedDay(null);
+                  }}
+                >
                   Clear all filters
                 </button>
               )}
-            </div>
-          )}
-        </section>
-
-        <section className="wrap section" id="upcoming" aria-label="Events this week">
-          <div className="section-head">
-            <div>
-              <p className="eyebrow">Plan ahead</p>
-              <h2 className="display">Next seven days</h2>
-            </div>
-            <p className="count">
-              {upcoming.length} {upcoming.length === 1 ? "event" : "events"} · grouped by day
-            </p>
-          </div>
-
-          {upcoming.length ? (
-            upcomingByDay.map(([date, group]) => (
-              <div className="daygroup" key={date}>
-                <div className="day-head">
-                  <h3>{date}</h3>
-                  <span>
-                    {group.length} {group.length === 1 ? "event" : "events"}
-                  </span>
-                  <span className="rule" />
-                </div>
-                <div className="grid">
-                  {group.map((event) => (
-                    <EventCard key={event.id} {...cardProps(event)} />
-                  ))}
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="empty">
-              <h3>No upcoming events match</h3>
-              <p>Try a wider radius, a different town, or switch the area to &ldquo;All nearby&rdquo;.</p>
-              <button type="button" className="btn-solid" onClick={clearAll}>
-                Reset filters
-              </button>
             </div>
           )}
         </section>
@@ -1343,16 +1329,16 @@ export default function Home() {
 
             <div className="sheet-scroll">
               <div className="sheet-group">
-                <h4>Town</h4>
+                <h4>Drive time from Orchard Park</h4>
                 <div className="sheet-chips">
-                  {townOptions.map((option) => (
+                  {[null, 5, 10, 15].map((option) => (
                     <button
-                      key={option.value}
+                      key={String(option)}
                       type="button"
-                      aria-pressed={town === option.value}
-                      onClick={() => setTown(option.value)}
+                      aria-pressed={maxDistance === option}
+                      onClick={() => setMaxDistance(option)}
                     >
-                      {option.label}
+                      {option === null ? `Up to 25 mi · ~${driveMinutes(25)} min` : `Up to ${option} mi · ~${driveMinutes(option)} min`}
                     </button>
                   ))}
                 </div>
@@ -1364,22 +1350,6 @@ export default function Home() {
                   {KIND_OPTIONS.map((option) => (
                     <button key={option} type="button" aria-pressed={kind === option} onClick={() => setKind(option)}>
                       {option}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="sheet-group">
-                <h4>Within</h4>
-                <div className="sheet-chips">
-                  {[null, 5, 10, 15].map((option) => (
-                    <button
-                      key={String(option)}
-                      type="button"
-                      aria-pressed={maxDistance === option}
-                      onClick={() => setMaxDistance(option)}
-                    >
-                      {option === null ? "25 miles" : `${option} miles`}
                     </button>
                   ))}
                 </div>

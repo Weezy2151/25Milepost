@@ -57,14 +57,10 @@ test("server-renders the dynamic events finder with a last-known snapshot", asyn
 
   assert.match(html, /The 25-Mile Post/);
   assert.match(html, /Cruise Night at the Depot/);
-  assert.match(html, /East Aurora Farmers Market/);
   assert.doesNotMatch(html, /Fossil Frenzy Play Cafe/);
   assert.match(html, /Erie County Fair/);
   assert.doesNotMatch(html, /Au-Some Morning Edition/);
-  assert.match(html, /Happening today/);
-  assert.match(html, /Next seven days/);
-  assert.match(html, /Southtowns/);
-  assert.match(html, /All nearby/);
+  assert.match(html, /Pick a day this week/);
   assert.match(html, /Town of Orchard Park/);
   assert.match(html, /Town of Hamburg/);
   assert.match(html, /Orchard Park Bee/);
@@ -75,7 +71,11 @@ test("server-renders the dynamic events finder with a last-known snapshot", asyn
   assert.match(html, /Hello, Orchard Park\./);
   assert.doesNotMatch(html, /Good (morning|afternoon|evening), Orchard Park/);
 
-  assert.equal((html.match(/<article class="card /g) ?? []).length, 8);
+  // Server-side, "today" defaults to whichever day the snapshot flags — that's
+  // the erie fair, cruise night, concert and East Aurora market (4 of the 8
+  // fallback events); the rest live on other day tabs until picked.
+  assert.equal((html.match(/<article class="card /g) ?? []).length, 4);
+  assert.match(html, /East Aurora Farmers Market/);
 });
 
 test("keeps live refresh, interactions and source adapters intact", async () => {
@@ -116,10 +116,10 @@ test("keeps live refresh, interactions and source adapters intact", async () => 
   assert.doesNotMatch(page, /setInterval/);
   assert.match(page, /refreshed each morning/);
   assert.match(page, /Museums & culture/);
-  assert.match(page, /setTown/);
+  assert.match(page, /setSelectedDay/);
   assert.match(page, /setQuery/);
   assert.match(page, /setShowSaved/);
-  assert.match(page, /Southtowns/);
+  assert.match(page, /Drive time/);
   assert.match(data, /Destination Dinosaur/);
 
   // Saved events, the My Day itinerary and the theme all persist per device.
@@ -133,7 +133,7 @@ test("keeps live refresh, interactions and source adapters intact", async () => 
   assert.match(api, /s-maxage=86400/);
   assert.match(api, /West Seneca Farmers Market/);
   assert.match(api, /stale-while-revalidate/);
-  assert.match(page, /All nearby/);
+  assert.match(page, /daypicker/);
   assert.match(layout, /The 25-Mile Post \| Family Things To Do Near Orchard Park/);
   assert.match(layout, /images: \[\{ url: imageUrl/);
 });
