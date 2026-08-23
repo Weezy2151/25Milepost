@@ -143,7 +143,7 @@ function classify(title: string, description: string, source: string): EventKind
   return "Community";
 }
 
-export function inferSetting(title: string, description: string, venue: string, tags: string[], kind: EventKind): EventSetting {
+function inferSetting(title: string, description: string, venue: string, tags: string[], kind: EventKind): EventSetting {
   const text = `${title} ${description} ${venue} ${tags.join(" ")} ${kind}`.toLowerCase();
   if (/fairgrounds|depot|brewery|pavilion|museum & grounds|zoo/i.test(text)) return "both";
   if (/library|museum|indoor|escape|play cafe|theatre|storytime|microscope|board game|lego|tinkering|sensory/i.test(text)) return "indoor";
@@ -850,7 +850,7 @@ function cacheKeyFor(todayKey: string) {
  * Exported so the scheduled worker can warm the cache each morning — otherwise
  * the first visitor after the TTL expires pays for nine live feed fetches.
  */
-export async function buildEventsPayload(): Promise<EventsPayload> {
+async function buildEventsPayload(): Promise<EventsPayload> {
   const todayKey = localDateKey();
   const endKey = addDays(todayKey, 7);
 
