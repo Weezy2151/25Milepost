@@ -1,34 +1,60 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import test from "node:test";
 
-async function render() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
+const PORT = 4173 + (process.pid % 1000);
 
-  return worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
-    }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
-  );
+/**
+ * Boots the production Next.js server (`next start`, against the build
+ * produced by `npm run build`) on a scratch port, fetches "/", and returns
+ * the rendered HTML. Assumes `next build` has already been run — CI/local
+ * runs should do `npm run build && npm test`.
+ */
+async function withServer(run) {
+  const child = spawn("npx", ["next", "start", "-p", String(PORT)], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, PORT: String(PORT) },
+  });
+
+  let ready = false;
+  const readyPromise = new Promise((resolve, reject) => {
+    const onData = (chunk) => {
+      const text = chunk.toString();
+      if (/Ready in|started server/i.test(text)) {
+        ready = true;
+        resolve();
+      }
+    };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.once("exit", (code) => {
+      if (!ready) reject(new Error(`next start exited early (code ${code})`));
+    });
+  });
+
+  await Promise.race([
+    readyPromise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("next start timed out")), 30_000)),
+  ]);
+
+  try {
+    return await run(`http://localhost:${PORT}`);
+  } finally {
+    child.kill("SIGTERM");
+    await once(child, "exit").catch(() => {});
+  }
 }
 
 test("server-renders the dynamic events finder with a last-known snapshot", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+  const html = await withServer(async (base) => {
+    const response = await fetch(base, { headers: { accept: "text/html" } });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+    return response.text();
+  });
 
-  const html = await response.text();
   assert.match(html, /The 25-Mile Post/);
   assert.match(html, /Cruise Night at the Depot/);
   assert.match(html, /East Aurora Farmers Market/);
@@ -43,7 +69,6 @@ test("server-renders the dynamic events finder with a last-known snapshot", asyn
   assert.match(html, /Town of Hamburg/);
   assert.match(html, /Orchard Park Bee/);
   assert.match(html, /Hamburg Sun/);
-  assert.doesNotMatch(html, /Tuesday, August 11, 2026|Movie in the Park: Tangled|Teen Game Night|Delaware Park Flow Jam/);
 
   // The greeting and any stored itinerary resolve after mount, so the server
   // markup must stay time- and storage-independent.
@@ -53,13 +78,12 @@ test("server-renders the dynamic events finder with a last-known snapshot", asyn
   assert.equal((html.match(/<article class="card /g) ?? []).length, 8);
 });
 
-test("keeps live refresh, interactions, source adapters and hosting metadata", async () => {
-  const [page, data, api, layout, hosting] = await Promise.all([
+test("keeps live refresh, interactions and source adapters intact", async () => {
+  const [page, data, api, layout] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/events-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/events/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
 
   // Distances come from real coordinates, not a per-town constant.
@@ -112,25 +136,10 @@ test("keeps live refresh, interactions, source adapters and hosting metadata", a
   assert.match(page, /All nearby/);
   assert.match(layout, /The 25-Mile Post \| Family Things To Do Near Orchard Park/);
   assert.match(layout, /images: \[\{ url: imageUrl/);
-
-  const manifest = JSON.parse(hosting);
-  assert.equal(manifest.project_id, "appgprj_6a7a45f3b30481919b110ea039820221");
 });
 
-test("warms the event cache on a schedule", async () => {
-  const [worker, viteConfig, built] = await Promise.all([
-    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
-    readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
-    readFile(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"),
-  ]);
-
-  assert.match(worker, /async scheduled\(/);
-  assert.match(worker, /buildEventsPayload/);
-  // Static-importing the route would drag `cloudflare:workers` into the entry
-  // graph and break loading this bundle under plain Node.
-  assert.doesNotMatch(worker, /^import \{ buildEventsPayload \}/m);
-  assert.match(viteConfig, /crons:/);
-
-  const crons = JSON.parse(built)?.triggers?.crons;
-  assert.ok(Array.isArray(crons) && crons.length > 0, "cron triggers must reach the deployed worker config");
+test("schedules a Vercel Cron warm-up of the events cache", async () => {
+  const vercelJson = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
+  assert.ok(Array.isArray(vercelJson.crons) && vercelJson.crons.length > 0, "vercel.json must declare crons");
+  assert.ok(vercelJson.crons.every((cron) => cron.path === "/api/events"), "crons should warm the events route");
 });

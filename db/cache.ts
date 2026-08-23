@@ -1,72 +1,41 @@
-import { eq } from "drizzle-orm";
-import { getDb } from "./index";
-import { eventCache } from "./schema";
+/**
+ * Simple per-instance in-memory cache for the events API.
+ *
+ * The original template optionally backed this with Cloudflare D1. On Vercel
+ * there is no equivalent bound database by default, so this keeps the same
+ * memory-first behavior the app already had (D1 was never configured here —
+ * `.openai/hosting.json` had `d1: null` — so this is a no-op change in
+ * practice) without pulling in any Cloudflare-only APIs.
+ *
+ * Note: serverless function instances are not guaranteed to stay warm between
+ * requests, so this cache is a best-effort speedup, not a durable store. If
+ * you want warm caching across cold starts on Vercel, swap this for Vercel KV
+ * / Upstash Redis, or rely on the `revalidate` option on `fetch` calls.
+ */
 
 const memoryCache = new Map<string, { data: string; expiresAt: number }>();
 
 export async function getCachedData<T>(key: string): Promise<T | null> {
   const now = Date.now();
+  const entry = memoryCache.get(key);
+  if (!entry) return null;
 
-  // Try in-memory cache first
-  const mem = memoryCache.get(key);
-  if (mem && mem.expiresAt > now) {
-    try {
-      return JSON.parse(mem.data) as T;
-    } catch {
-      memoryCache.delete(key);
-    }
+  if (entry.expiresAt <= now) {
+    memoryCache.delete(key);
+    return null;
   }
 
-  // Try D1 cache if available
   try {
-    const db = getDb();
-    const rows = await db
-      .select()
-      .from(eventCache)
-      .where(eq(eventCache.key, key))
-      .limit(1);
-
-    if (rows.length > 0) {
-      const row = rows[0];
-      if (row.expiresAt > now) {
-        // Sync to memory cache
-        memoryCache.set(key, { data: row.data, expiresAt: row.expiresAt });
-        return JSON.parse(row.data) as T;
-      }
-    }
+    return JSON.parse(entry.data) as T;
   } catch {
-    // D1 unavailable or uninitialized; gracefully proceed with memory cache / fresh fetch
+    memoryCache.delete(key);
+    return null;
   }
-
-  return null;
 }
 
 export async function setCachedData<T>(key: string, data: T, ttlSeconds: number): Promise<void> {
-  const now = Date.now();
-  const expiresAt = now + ttlSeconds * 1000;
-  const serialized = JSON.stringify(data);
-
-  // Store in memory cache
-  memoryCache.set(key, { data: serialized, expiresAt });
-
-  // Store in D1 cache if available
-  try {
-    const db = getDb();
-    await db
-      .insert(eventCache)
-      .values({
-        key,
-        data: serialized,
-        expiresAt,
-      })
-      .onConflictDoUpdate({
-        target: eventCache.key,
-        set: {
-          data: serialized,
-          expiresAt,
-        },
-      });
-  } catch {
-    // D1 unavailable; memory cache is already set
-  }
+  memoryCache.set(key, {
+    data: JSON.stringify(data),
+    expiresAt: Date.now() + ttlSeconds * 1000,
+  });
 }
