@@ -1,5 +1,5 @@
 import { getCachedData, setCachedData } from "../../../db/cache";
-import { distanceFromOrigin, type Precision } from "../../../lib/geo";
+import { distanceFromOrigin, extractTown, ORIGIN, type Precision } from "../../../lib/geo";
 import { describe, resolveImages } from "../../../lib/enrich";
 
 type EventKind = "Fairs & festivals" | "Markets & food" | "Live music" | "Sports & active" | "Outdoors" | "Museums & culture" | "Community" | "Library";
@@ -35,18 +35,44 @@ export type LiveEvent = {
 };
 
 const ZONE = "America/New_York";
+
+/**
+ * Feeds answer a browser and stall or 403 an unfamiliar agent.
+ * Explore & More returned 403 to the old "The 25-Mile Post family event index"
+ * string and serves its calendar fine with this one.
+ */
+const USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
 const LIBRARY_FEEDS = [
   ["Library Programs", "https://buffalolib.libcal.com/rss.php?iid=4336&m=month&cid=12898"],
   ["Library Crafts", "https://buffalolib.libcal.com/rss.php?iid=4336&m=month&cid=16301"],
 ] as const;
+
+/**
+ * The Events Calendar REST API, where a site exposes it.
+ *
+ * Preferred over the matching ?ical=1 feed: it filters server-side by date and
+ * carries categories, cost, a featured image and a structured venue, so these
+ * events arrive richer than anything the iCal parser can recover.
+ */
+const TRIBE_FEEDS = [
+  ["EverythingOP", "https://everythingop.com", "southtowns", "Orchard Park"],
+  ["Buffalo Rising", "https://www.buffalorising.com", "city", "Buffalo"],
+] as const;
+
+/*
+ * Removed 2026-08-23, all confirmed dead rather than merely quiet:
+ *   West Seneca Recreation  — 200 OK, valid iCalendar, zero VEVENTs
+ *   Hamburg Recreation      — townofhamburgny.gov does not respond at all
+ *   Buffalo Special/City/Sponsored — buffalony.gov completes TLS then hangs
+ * They were failing silently behind Promise.allSettled and only added latency.
+ */
 const ICS_FEEDS = [
   ["Town of Orchard Park", "https://www.orchardparkny.gov/events/?ical=1", "southtowns"],
   ["Town of Evans", "https://townofevansny.gov/events/month/?ical=1&shortcode=a96c91f8", "southtowns"],
-  ["West Seneca Recreation", "https://www.westseneca.gov/common/modules/iCalendar/iCalendar.aspx?catID=32&feed=calendar", "southtowns"],
-  ["Hamburg Recreation", "https://www.townofhamburgny.gov/common/modules/iCalendar/iCalendar.aspx?catID=26&feed=calendar", "southtowns"],
-  ["Buffalo Special Events", "https://www.buffalony.gov/common/modules/iCalendar/iCalendar.aspx?catID=34&feed=calendar", "city"],
-  ["Buffalo City Events", "https://www.buffalony.gov/common/modules/iCalendar/iCalendar.aspx?catID=24&feed=calendar", "city"],
-  ["Buffalo Sponsored Events", "https://www.buffalony.gov/common/modules/iCalendar/iCalendar.aspx?catID=32&feed=calendar", "city"],
+  ["Southtowns Regional Chamber", "https://southtownsregionalchamber.org/?post_type=tribe_events&ical=1&eventDisplay=list", "southtowns"],
+  ["Explore & More", "https://exploreandmore.org/events/?ical=1", "city"],
 ] as const;
 
 const branchInfo: Record<string, { town: string; distance: number; area: "southtowns" | "city" }> = {
@@ -120,26 +146,48 @@ function dayLabel(key: string, todayKey: string) {
   return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(new Date(`${key}T12:00:00Z`)).toUpperCase();
 }
 
+/** Town names come back from the geo lookup as lowercase keys; the UI shows them. */
+function titleCase(value: string) {
+  return value.replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
 function mapUrl(venue: string, town: string) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${venue} ${town} NY`)}`;
 }
 
 function familyFriendly(title: string, audiences: string[], description: string) {
   const text = `${title} ${description}`.toLowerCase();
-  if (/adult only|ages 21|21\+|nightclub|bar crawl|cocktail|board meeting|planning board|zoning|public hearing|work session|commission meeting|committee meeting|court calendar|budget hearing|fundraiser donation drop off/.test(text)) return false;
+  if (/adult only|adults only|ages 21|21\+|18\+|nightclub|bar crawl|pub crawl|cocktail|burlesque|casino night|board meeting|planning board|zoning|public hearing|work session|commission meeting|committee meeting|council meeting|court calendar|budget hearing|caucus|fundraiser donation drop off/.test(text)) return false;
   if (audiences.length === 0) return true;
   return audiences.some((audience) => /child|teen|all ages|family|young adult/i.test(audience));
 }
 
+const KIND_RULES: Array<[RegExp, EventKind]> = [
+  [/fair\b|festival|parade|mela|art spree|block party|street party/, "Fairs & festivals"],
+  [/concert|live music|music series|jazz|bandstand|orchestra|symphony|open mic|acoustic|\bband\b|karaoke/, "Live music"],
+  [/museum|zoo|dinosaur|shakespeare|theater|theatre|movie|film|tour\b|history|gallery|exhibit/, "Museums & culture"],
+  [/farmers? market|farm market|\bmarket\b|food truck|tasting|taste of|brewery|brewing|\bbeer\b|cider|winery|\bwine\b|urban farm|harvest|chili cook|bbq|barbecue/, "Markets & food"],
+  [/baseball|bisons|buffalo bills|football|sport|fitness|yoga|pickleball|bocce|\bbike\b|\brun\b|\b5k\b/, "Sports & active"],
+  [/park\b|nature|hike|outdoor|beach|garden|wildlife|trail|soap making/, "Outdoors"],
+  [/trivia|quiz night|bingo|game night|comedy/, "Community"],
+  [/library|libcal|b&ecpl/, "Library"],
+];
+
+/**
+ * Pick a category, weighting the title over the description.
+ *
+ * Descriptions mention food and parking for almost everything, which is how an
+ * outdoor movie night ended up filed under "Markets & food". The title says
+ * what an event *is*, so it gets the first pass on its own; the description is
+ * only consulted when the title is uninformative.
+ */
 function classify(title: string, description: string, source: string): EventKind {
-  const text = `${title} ${description} ${source}`.toLowerCase();
-  if (/fair|festival|parade|mela|art spree/.test(text)) return "Fairs & festivals";
-  if (/farmers? market|farm market|food|taste|urban farm|harvest/.test(text)) return "Markets & food";
-  if (/concert|live music|music series|jazz|bandstand|orchestra|symphony/.test(text)) return "Live music";
-  if (/baseball|bisons|buffalo bills|football|sport|fitness|yoga|pickleball|bocce|bike/.test(text)) return "Sports & active";
-  if (/park|nature|hike|outdoor|beach|garden|wildlife|soap making/.test(text)) return "Outdoors";
-  if (/museum|zoo|dinosaur|shakespeare|theater|movie|tour|history|art|gallery/.test(text)) return "Museums & culture";
-  if (/library|libcal|b&ecpl/.test(text)) return "Library";
+  const headline = title.toLowerCase();
+  for (const [pattern, kind] of KIND_RULES) if (pattern.test(headline)) return kind;
+
+  const body = `${description} ${source}`.toLowerCase();
+  for (const [pattern, kind] of KIND_RULES) if (pattern.test(body)) return kind;
+
   return "Community";
 }
 
@@ -152,6 +200,13 @@ function inferSetting(title: string, description: string, venue: string, tags: s
   if (kind === "Markets & food" || kind === "Outdoors" || kind === "Sports & active") return "outdoor";
   return "both";
 }
+
+/**
+ * Per-feed timeout. Measured cold: Buffalo Rising 4.4–5.5s, Town of Evans ~7s,
+ * so the previous 8s clipped them on a slow morning. Feeds are fetched in
+ * parallel, so this is close to the whole route's wall clock.
+ */
+const FEED_TIMEOUT_MS = 12_000;
 
 async function fetchWithTimeout(url: string, headers: HeadersInit, timeoutMs = 4000): Promise<string> {
   const signal = AbortSignal.timeout(timeoutMs);
@@ -197,6 +252,203 @@ function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[
       tags,
       accent: ["mint", "sky", "sun", "coral", "purple"][index % 5], image: image || undefined, today: dateKey === todayKey,
       kind, setting, priority: 1,
+    }];
+  });
+}
+
+/* ------------------------------------------- The Events Calendar REST API */
+
+type TribeVenue = { venue?: string; address?: string; city?: string; state?: string };
+type TribeEvent = {
+  id?: number;
+  title?: string;
+  description?: string;
+  excerpt?: string;
+  url?: string;
+  cost?: string;
+  all_day?: boolean;
+  start_date?: string;
+  end_date?: string;
+  image?: false | { url?: string };
+  venue?: TribeVenue | unknown[];
+  categories?: Array<{ name?: string }>;
+  tags?: Array<{ name?: string }>;
+};
+
+/** Tribe returns `[]` for "no venue" and an object otherwise. */
+function tribeVenue(value: TribeEvent["venue"]): TribeVenue {
+  return value && !Array.isArray(value) ? (value as TribeVenue) : {};
+}
+
+function tribeImage(value: TribeEvent["image"]) {
+  return value && typeof value === "object" && typeof value.url === "string" ? value.url : undefined;
+}
+
+/** "2026-08-24 16:00:00" -> "4 PM", or "All day" for all-day events. */
+function tribeTime(startDate: string, allDay: boolean) {
+  if (allDay) return "All day";
+  const time = startDate.split(" ")[1];
+  return time ? formatTime(time) : "All day";
+}
+
+/**
+ * Normalise one site's Events Calendar API response.
+ *
+ * `defaultTown` is the site's own patch — EverythingOP is Orchard Park unless a
+ * listing says otherwise. Regional sites cover far more than 25 miles, so any
+ * event we cannot actually place is dropped rather than allowed to claim the
+ * UNKNOWN_DISTANCE fallback; a local site keeps the fallback because its
+ * listings are local by construction.
+ */
+function parseTribe(
+  json: string,
+  source: string,
+  defaultArea: "southtowns" | "city",
+  defaultTown: string,
+  todayKey: string,
+  endKey: string,
+  regional: boolean,
+): LiveEvent[] {
+  let parsed: { events?: TribeEvent[] };
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const items = Array.isArray(parsed.events) ? parsed.events : [];
+
+  return items.flatMap((item, index) => {
+    const start = item.start_date ?? "";
+    const dateKey = start.slice(0, 10);
+    if (!dateKey || dateKey < todayKey || dateKey > endKey) return [];
+
+    const title = cleanHtml(item.title ?? "");
+    if (!title) return [];
+    const description = cleanHtml(item.description ?? item.excerpt ?? "");
+    if (!familyFriendly(title, [], description)) return [];
+
+    const place_ = tribeVenue(item.venue);
+    const venue = cleanHtml(place_.venue ?? "") || defaultTown;
+    const addressText = [place_.venue, place_.address, place_.city].filter(Boolean).join(" ");
+    const town = place_.city?.trim() || titleCase(extractTown(addressText) ?? "") || (regional ? "" : defaultTown);
+    if (regional && !town) return [];
+
+    const located = place(venue, town || defaultTown);
+    if (located.distance > 25) return [];
+    if (regional && located.distancePrecision === "region") return [];
+
+    const resolvedTown = town || defaultTown;
+    const area = resolvedTown.toLowerCase() === "buffalo" ? "city" : defaultArea;
+    const categories = (item.categories ?? []).map((category) => cleanHtml(category.name ?? "")).filter(Boolean);
+    const kind = classify(title, `${description} ${categories.join(" ")}`, source);
+    const tags = [kind, ...categories.slice(0, 2)].filter(Boolean);
+    const cost = cleanHtml(item.cost ?? "") || (/\bfree\b/i.test(description) ? "Free" : "See listing");
+
+    return [{
+      id: `tribe-${source}-${item.id ?? index}-${dateKey}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      area, town: resolvedTown, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey,
+      time: tribeTime(start, item.all_day === true),
+      title, venue, ...located,
+      description: describe(description, title, venue, resolvedTown),
+      cost,
+      source, url: item.url ?? "", mapUrl: mapUrl(venue, resolvedTown),
+      tags,
+      accent: ["sun", "coral", "sky", "mint", "purple"][index % 5],
+      image: tribeImage(item.image),
+      today: dateKey === todayKey,
+      kind, setting: inferSetting(title, description, venue, tags, kind),
+      // Above municipal listings, below the hand-picked marquee events.
+      priority: kind === "Community" ? 5 : 6,
+    }];
+  });
+}
+
+/* ------------------------------------------------ Ticketmaster Discovery */
+
+type TicketmasterEvent = {
+  id?: string;
+  name?: string;
+  url?: string;
+  info?: string;
+  description?: string;
+  pleaseNote?: string;
+  dates?: { start?: { localDate?: string; localTime?: string; dateTBD?: boolean; timeTBD?: boolean } };
+  images?: Array<{ url?: string; width?: number; ratio?: string }>;
+  priceRanges?: Array<{ min?: number; max?: number; currency?: string }>;
+  classifications?: Array<{ segment?: { name?: string }; genre?: { name?: string } }>;
+  _embedded?: { venues?: Array<{ name?: string; city?: { name?: string }; address?: { line1?: string } }> };
+};
+
+/** Widest image at least 640px, so cards get something usable rather than a thumbnail. */
+function ticketmasterImage(images: TicketmasterEvent["images"]) {
+  const usable = (images ?? []).filter((image) => image.url?.startsWith("https://") && (image.width ?? 0) >= 640);
+  return usable.sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.url;
+}
+
+function ticketmasterCost(ranges: TicketmasterEvent["priceRanges"]) {
+  const range = (ranges ?? [])[0];
+  if (!range || typeof range.min !== "number") return "Ticket prices vary";
+  const min = Math.round(range.min);
+  const max = typeof range.max === "number" ? Math.round(range.max) : min;
+  return min === max ? `$${min}` : `$${min}–$${max}`;
+}
+
+/**
+ * Ticketed concerts, festivals and games within the radius.
+ *
+ * This is the only source that reliably carries touring live music and big
+ * ticketed events; the municipal and community calendars never listed them.
+ * Optional — without TICKETMASTER_API_KEY the source is simply skipped.
+ */
+function parseTicketmaster(json: string, todayKey: string, endKey: string): LiveEvent[] {
+  let parsed: { _embedded?: { events?: TicketmasterEvent[] } };
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const items = parsed._embedded?.events ?? [];
+
+  return items.flatMap((item, index) => {
+    const dateKey = item.dates?.start?.localDate ?? "";
+    if (!dateKey || dateKey < todayKey || dateKey > endKey) return [];
+
+    const title = cleanHtml(item.name ?? "");
+    if (!title) return [];
+    const description = cleanHtml(item.info ?? item.description ?? item.pleaseNote ?? "");
+    if (!familyFriendly(title, [], description)) return [];
+
+    const place_ = (item._embedded?.venues ?? [])[0] ?? {};
+    const venue = cleanHtml(place_.name ?? "");
+    if (!venue) return [];
+    const town = place_.city?.name?.trim() || titleCase(extractTown(`${venue} ${place_.address?.line1 ?? ""}`) ?? "") || "";
+    if (!town) return [];
+
+    const located = place(venue, town);
+    if (located.distance > 25 || located.distancePrecision === "region") return [];
+
+    const genres = (item.classifications ?? [])
+      .flatMap((classification) => [classification.segment?.name, classification.genre?.name])
+      .filter((name): name is string => Boolean(name) && name !== "Undefined");
+    const kind = classify(title, `${description} ${genres.join(" ")}`, "Ticketmaster");
+    const tags = [kind, ...genres.slice(0, 2)];
+    const start = item.dates?.start;
+
+    return [{
+      id: `tm-${item.id ?? index}-${dateKey}`,
+      area: town.toLowerCase() === "buffalo" ? "city" : "southtowns",
+      town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey,
+      time: start?.timeTBD || !start?.localTime ? "See listing" : formatTime(start.localTime),
+      title, venue, ...located,
+      description: describe(description, title, venue, town),
+      cost: ticketmasterCost(item.priceRanges),
+      source: "Ticketmaster", url: item.url ?? "", mapUrl: mapUrl(venue, town),
+      tags,
+      accent: ["purple", "coral", "sun", "sky", "mint"][index % 5],
+      image: ticketmasterImage(item.images),
+      today: dateKey === todayKey,
+      kind, setting: inferSetting(title, description, venue, tags, kind),
+      priority: 7,
     }];
   });
 }
@@ -821,7 +1073,25 @@ function generateDynamicRecurringEvents(todayKey: string, endKey: string): LiveE
   return events;
 }
 
+/**
+ * Date of the last human pass over the marquee list below.
+ *
+ * These entries are hand-written and cannot refresh themselves, so a stale list
+ * quietly empties the spotlight rail. The warning is the reminder to revisit.
+ */
+const FEATURED_REVIEWED_THROUGH = "2026-08-31";
+
+/**
+ * A short hand-picked list of the season's genuinely big draws.
+ *
+ * Deliberately small: one-off dated events belong in a live feed wherever one
+ * exists. Only add something here when no feed carries it and missing it would
+ * be embarrassing.
+ */
 function featuredMajorEvents(todayKey: string, endKey: string): LiveEvent[] {
+  if (todayKey > FEATURED_REVIEWED_THROUGH) {
+    console.warn(`[events] featured list not reviewed since ${FEATURED_REVIEWED_THROUGH}; entries may be stale`);
+  }
   const specific: SpecificFeatured[] = [
     {
       id: "erie-county-fair",
@@ -861,42 +1131,6 @@ function featuredMajorEvents(todayKey: string, endKey: string): LiveEvent[] {
       setting: "both",
       priority: 9,
     },
-    {
-      id: "bills-preseason",
-      area: "southtowns",
-      town: "Orchard Park",
-      dateKey: "2026-08-15",
-      time: "1 PM",
-      title: "Buffalo Bills vs. Carolina Panthers",
-      venue: "Highmark Stadium",
-      distance: 3,
-      description: "The Bills open their preseason at home, putting a major live sporting event right in Orchard Park.",
-      cost: "Ticket prices vary",
-      source: "Buffalo Bills",
-      url: "https://www.buffalobs.com/schedule/",
-      tags: ["Football", "Home game", "Tickets"],
-      kind: "Sports & active",
-      setting: "outdoor",
-      priority: 9,
-    },
-    {
-      id: "festival-india",
-      area: "city",
-      town: "Buffalo",
-      dateKey: "2026-08-15",
-      time: "2–8 PM",
-      title: "Festival of India",
-      venue: "Canalside",
-      distance: 19,
-      description: "Indian dance, music, food, art and community fill the waterfront at this welcoming all-ages cultural festival.",
-      cost: "Free",
-      source: "Buffalo Waterfront",
-      url: "https://buffalowaterfront.com/events/festivalofindia",
-      tags: ["Festival", "Food", "Music"],
-      kind: "Fairs & festivals",
-      setting: "outdoor",
-      priority: 9,
-    },
   ];
 
   return specific.flatMap((item, index) => {
@@ -934,6 +1168,47 @@ function capLibraries(events: LiveEvent[]) {
   return [...nonLibrary, ...selected];
 }
 
+const TITLE_STOPWORDS = new Set(["the", "and", "for", "with", "annual", "village", "town", "city", "series", "event", "events", "of", "at", "in", "on", "a", "an"]);
+
+/** Significant words in a title, for loose matching between two sources. */
+function titleWords(title: string) {
+  return new Set(
+    title.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)
+      .filter((word) => word.length > 2 && !TITLE_STOPWORDS.has(word)),
+  );
+}
+
+/**
+ * Drop hand-written recurring entries that a live feed now covers.
+ *
+ * `dedupe` only catches exact title+venue collisions, so the templated
+ * "Village of Orchard Park Farmers Market" survived alongside EverythingOP's
+ * listing of the same market at a slightly differently-worded depot. The
+ * template is the fallback: when a real feed carries the event that day, the
+ * live copy wins, because it has the current time, cost and image.
+ */
+function dropSupersededRecurring(recurring: LiveEvent[], live: LiveEvent[]) {
+  const liveByDate = new Map<string, Set<string>[]>();
+  for (const event of live) {
+    const bucket = liveByDate.get(event.dateKey) ?? [];
+    bucket.push(titleWords(event.title));
+    liveByDate.set(event.dateKey, bucket);
+  }
+
+  return recurring.filter((event) => {
+    const sameDay = liveByDate.get(event.dateKey);
+    if (!sameDay) return true;
+    const words = titleWords(event.title);
+    if (words.size === 0) return true;
+    return !sameDay.some((other) => {
+      if (other.size === 0) return false;
+      let shared = 0;
+      for (const word of words) if (other.has(word)) shared += 1;
+      return shared / Math.min(words.size, other.size) >= 0.6;
+    });
+  });
+}
+
 function dedupe(events: LiveEvent[]) {
   const seen = new Set<string>();
   return events.filter((event) => {
@@ -944,12 +1219,15 @@ function dedupe(events: LiveEvent[]) {
   });
 }
 
+/** Cold refresh fans out to every feed plus image lookups; the default 10s is tight. */
+export const maxDuration = 30;
+
 export type EventsPayload = {
   events: LiveEvent[];
   count: number;
   updatedAt: string;
   window: { from: string; to: string };
-  sources: Array<{ name: string; ok: boolean }>;
+  sources: Array<{ name: string; ok: boolean; count?: number; error?: string }>;
   mix: Record<string, number>;
 };
 
@@ -959,7 +1237,7 @@ const CACHE_HEADERS = {
 };
 
 function cacheKeyFor(todayKey: string) {
-  return `events:balanced-v2:${todayKey}`;
+  return `events:balanced-v3:${todayKey}`;
 }
 
 /**
@@ -968,36 +1246,111 @@ function cacheKeyFor(todayKey: string) {
  * Exported so the scheduled worker can warm the cache each morning — otherwise
  * the first visitor after the TTL expires pays for nine live feed fetches.
  */
+function hasTicketmasterKey() {
+  return Boolean(process.env.TICKETMASTER_API_KEY);
+}
+
+/**
+ * Concerts, festivals and games inside the radius, when a key is configured.
+ * Returns an empty list otherwise, so the app runs unchanged without one.
+ */
+function ticketmasterRequest(todayKey: string, endKey: string, headers: HeadersInit) {
+  const apiKey = process.env.TICKETMASTER_API_KEY;
+  if (!apiKey) return [];
+  const query = new URLSearchParams({
+    apikey: apiKey,
+    latlong: `${ORIGIN.lat},${ORIGIN.lon}`,
+    radius: "25",
+    unit: "miles",
+    startDateTime: `${todayKey}T00:00:00Z`,
+    endDateTime: `${endKey}T23:59:59Z`,
+    size: "100",
+    sort: "date,asc",
+  });
+  return [
+    (async () => ({
+      name: "Ticketmaster",
+      kind: "ticketmaster" as const,
+      area: "city" as const,
+      text: await fetchWithTimeout(`https://app.ticketmaster.com/discovery/v2/events.json?${query}`, headers, FEED_TIMEOUT_MS),
+    }))(),
+  ];
+}
+
 async function buildEventsPayload(): Promise<EventsPayload> {
   const todayKey = localDateKey();
   const endKey = addDays(todayKey, 7);
+  const headers = { "user-agent": USER_AGENT };
 
-  // 2. Fetch live feeds with timeouts
+  // 2. Fetch live feeds with timeouts. Fewer, healthier feeds means we can
+  //    afford to wait a little longer on each than the old 4s.
   const requests = [
     ...LIBRARY_FEEDS.map(async ([name, url]) => ({
       name,
       kind: "library" as const,
-      text: await fetchWithTimeout(url, { "user-agent": "The 25-Mile Post family event index" }, 4000),
+      text: await fetchWithTimeout(url, headers, FEED_TIMEOUT_MS),
+    })),
+    ...TRIBE_FEEDS.map(async ([name, origin, area, town]) => ({
+      name,
+      kind: "tribe" as const,
+      area: area as "southtowns" | "city",
+      town,
+      regional: name === "Buffalo Rising",
+      text: await fetchWithTimeout(
+        `${origin}/wp-json/tribe/events/v1/events?start_date=${todayKey}&end_date=${endKey}&per_page=50`,
+        headers,
+        FEED_TIMEOUT_MS,
+      ),
     })),
     ...ICS_FEEDS.map(async ([name, url, area]) => ({
       name,
       kind: "ics" as const,
       area: area as "southtowns" | "city",
-      text: await fetchWithTimeout(url, { "user-agent": "The 25-Mile Post family event index" }, 4000),
+      text: await fetchWithTimeout(url, headers, FEED_TIMEOUT_MS),
     })),
+    ...ticketmasterRequest(todayKey, endKey, headers),
+  ];
+
+  // Feed names, in the same order as `requests`, so a rejection can still say
+  // which source failed instead of the old anonymous "Source unavailable".
+  const requestNames = [
+    ...LIBRARY_FEEDS.map(([name]) => name),
+    ...TRIBE_FEEDS.map(([name]) => name),
+    ...ICS_FEEDS.map(([name]) => name),
+    ...(hasTicketmasterKey() ? ["Ticketmaster"] : []),
   ];
 
   const settled = await Promise.allSettled(requests);
   const events: LiveEvent[] = [];
-  const sources = settled.map((result) => {
-    if (result.status === "rejected") return { name: "Source unavailable", ok: false };
-    if (result.value.kind === "library") events.push(...parseLibrary(result.value.text, todayKey, endKey));
-    else events.push(...parseIcs(result.value.text, result.value.name, result.value.area, todayKey, endKey));
-    return { name: result.value.name, ok: true };
+  const sources = settled.map((result, index) => {
+    const name = requestNames[index];
+    if (result.status === "rejected") {
+      const error = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      console.error(`[events] source failed: ${name} — ${error}`);
+      return { name, ok: false, error };
+    }
+    const before = events.length;
+    if (result.value.kind === "library") {
+      events.push(...parseLibrary(result.value.text, todayKey, endKey));
+    } else if (result.value.kind === "tribe") {
+      events.push(
+        ...parseTribe(result.value.text, name, result.value.area, result.value.town, todayKey, endKey, result.value.regional),
+      );
+    } else if (result.value.kind === "ticketmaster") {
+      events.push(...parseTicketmaster(result.value.text, todayKey, endKey));
+    } else {
+      events.push(...parseIcs(result.value.text, name, result.value.area, todayKey, endKey));
+    }
+    const count = events.length - before;
+    // A feed that answers 200 with nothing usable is broken too — West Seneca
+    // did exactly that for months while reporting as healthy.
+    if (count === 0) console.warn(`[events] source returned no usable events: ${name}`);
+    return { name, ok: true, count };
   });
 
-  // 3. Merge dynamic recurring events, major featured attractions, and live feeds
-  const recurring = generateDynamicRecurringEvents(todayKey, endKey);
+  // 3. Merge: live feeds first, then hand-written recurring entries only where
+  //    no live feed already covers them, then the marquee attractions.
+  const recurring = dropSupersededRecurring(generateDynamicRecurringEvents(todayKey, endKey), events);
   const major = featuredMajorEvents(todayKey, endKey);
   const allEvents = [...major, ...recurring, ...events];
 

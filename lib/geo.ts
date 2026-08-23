@@ -58,6 +58,38 @@ const TOWNS: Record<string, Coords> = {
   williamsville: { lat: 42.9639, lon: -78.7378 },
   kenmore: { lat: 42.9656, lon: -78.87 },
   "grand island": { lat: 43.0334, lon: -78.9622 },
+
+  /*
+   * Out-of-range towns.
+   *
+   * Wide-net regional sources (Buffalo Rising) list Artpark in Lewiston and the
+   * Reg Lenna in Jamestown alongside downtown Buffalo events. Without coordinates
+   * these fell through to REGION_FALLBACK and claimed a flattering 18 miles.
+   * Naming them means the >25 mile filter can actually throw them out.
+   */
+  getzville: { lat: 43.0034, lon: -78.7583 },
+  "east amherst": { lat: 43.03, lon: -78.7 },
+  "north tonawanda": { lat: 43.0387, lon: -78.8642 },
+  lewiston: { lat: 43.1729, lon: -79.0353 },
+  youngstown: { lat: 43.2445, lon: -79.0509 },
+  "niagara falls": { lat: 43.0962, lon: -79.0377 },
+  lockport: { lat: 43.1706, lon: -78.6903 },
+  wilson: { lat: 43.3103, lon: -78.8264 },
+  akron: { lat: 43.0181, lon: -78.4964 },
+  medina: { lat: 43.22, lon: -78.3872 },
+  albion: { lat: 43.2467, lon: -78.1936 },
+  batavia: { lat: 43.0, lon: -78.1875 },
+  attica: { lat: 42.8642, lon: -78.282 },
+  warsaw: { lat: 42.7395, lon: -78.1339 },
+  arcade: { lat: 42.5342, lon: -78.4222 },
+  gowanda: { lat: 42.4634, lon: -78.9364 },
+  "silver creek": { lat: 42.5434, lon: -79.1653 },
+  dunkirk: { lat: 42.4795, lon: -79.3339 },
+  fredonia: { lat: 42.4401, lon: -79.3317 },
+  jamestown: { lat: 42.097, lon: -79.2353 },
+  ellicottville: { lat: 42.2795, lon: -78.6739 },
+  salamanca: { lat: 42.1573, lon: -78.7156 },
+  olean: { lat: 42.0778, lon: -78.4297 },
 };
 
 /**
@@ -109,6 +141,19 @@ const VENUES: Record<string, Coords> = {
   "riverworks": { lat: 42.8712, lon: -78.8875 },
   "outer harbor": { lat: 42.8563, lon: -78.8859 },
   "larkin square": { lat: 42.8748, lon: -78.8547 },
+  "ralph c wilson": { lat: 42.872, lon: -78.893 },
+  "fountain plaza": { lat: 42.8865, lon: -78.873 },
+  "kleinhans music hall": { lat: 42.9004, lon: -78.8823 },
+  "sheas performing arts": { lat: 42.8862, lon: -78.8737 },
+  "seneca one": { lat: 42.8759, lon: -78.872 },
+  "peace park": { lat: 42.716, lon: -78.8296 },
+  "classic rink": { lat: 42.7681, lon: -78.6131 },
+  graycliff: { lat: 42.6733, lon: -78.9877 },
+
+  // Out-of-range venues named explicitly so they resolve and then get filtered.
+  artpark: { lat: 43.1697, lon: -79.048 },
+  "reg lenna": { lat: 42.0951, lon: -79.2353 },
+  "ub center for the arts": { lat: 43.0008, lon: -78.7889 },
 };
 
 function normalise(value: string) {
@@ -138,6 +183,26 @@ function lookupVenue(venue: string): Coords | null {
     if (key.includes(name)) return coords;
   }
   return null;
+}
+
+/**
+ * Pull a known town out of a free-text address.
+ *
+ * Wide-net feeds put the location in a single string ("104 Aurora Ave, West
+ * Seneca, NY") with no separate town field. Matching is on whole words and
+ * prefers the longest hit, so that address resolves to West Seneca rather than
+ * to the "Aurora" in the street name, and "East Aurora" beats plain "Aurora".
+ */
+export function extractTown(text: string): string | null {
+  const key = normalise(text);
+  if (!key) return null;
+  let best: string | null = null;
+  // Town keys are plain letters and spaces, so they need no regex escaping.
+  for (const name of Object.keys(TOWNS)) {
+    if (best && name.length <= best.length) continue;
+    if (new RegExp(`\\b${name}\\b`).test(key)) best = name;
+  }
+  return best;
 }
 
 /** Great-circle distance in statute miles. */

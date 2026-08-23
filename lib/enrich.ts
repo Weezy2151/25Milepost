@@ -128,7 +128,12 @@ async function fetchOgImage(url: string): Promise<string | null> {
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { "user-agent": "The 25-Mile Post family event index", accept: "text/html" },
+      headers: {
+        // Same browser string the feed fetches use: event hosts 403 unknown agents.
+        "user-agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        accept: "text/html",
+      },
     });
     if (!response.ok) return null;
     if (!(response.headers.get("content-type") ?? "").includes("text/html")) return null;
