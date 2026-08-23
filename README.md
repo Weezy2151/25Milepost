@@ -6,7 +6,7 @@ Router and deployable on Vercel.
 
 ## Prerequisites
 
-- Node.js `>=20.9.0`
+- Node.js `>=22.6.0`
 
 ## Quick Start
 
@@ -23,6 +23,9 @@ Then open `http://localhost:3000`.
   fallback snapshot (`app/events-data.ts`, dated `SNAPSHOT_DATE`) so the page
   never shows a blank state, then refreshes itself from `/api/events` once
   mounted.
+- `/api/weather` validates and caches Orchard Park forecasts server-side, and
+  `/api/image` provides a size-limited, host-restricted image path for event
+  cards. Visitors never call feed, weather, or image hosts directly.
 - `app/api/events/route.ts` fetches thirteen live sources — library RSS, three
   Events Calendar REST APIs, four iCalendar feeds and four scraped HTML
   listings — merges in known
@@ -32,7 +35,7 @@ Then open `http://localhost:3000`.
 - `db/cache.ts` caches that combined payload for an hour — in a shared Redis
   store if one is configured, in memory otherwise. Entries stay servable for
   six hours past that hour, so an expired payload is returned immediately while
-  a rebuild runs behind the response, and a copy of the last payload that ever
+  one leased rebuild runs behind the response, and a copy of the last payload that ever
   built successfully is kept for a week as a floor. See "Caching on Vercel".
 - `vercel.json` declares two Vercel Cron Jobs that hit `/api/events` each
   morning to warm the cache ahead of the first visitor, mirroring the
@@ -158,7 +161,9 @@ posted nothing — worth revisiting when their tour season opens.
 
 This is a standard Next.js app — import the repo in the Vercel dashboard (or
 run `vercel`) and it will be auto-detected and built with no extra
-configuration. No environment variables are required for the app to run.
+configuration. No environment variables are required for the app to run. Set
+`NEXT_PUBLIC_SITE_URL` to the canonical production origin for absolute social
+metadata; Vercel's production hostname is used automatically otherwise.
 
 ### Caching on Vercel
 
@@ -183,7 +188,9 @@ Three behaviours sit on top of whichever store is in use:
   for six hours after that. Past the hour, the route answers from the stale
   copy immediately and rebuilds in `after()`, once the response is already on
   its way — nobody waits on thirteen live feeds because they happened to be the
-  first reader back. Watch the `X-Cache` header: `HIT`, `STALE`, `MISS`, or
+  first reader back. A Redis lease and an in-process single-flight guard prevent
+  simultaneous stale requests from fanning out again. Watch the `X-Cache`
+  header: `HIT`, `STALE`, `MISS`, or
   `LAST-GOOD`.
 - **A last-good copy**, written under a date-independent key with a one-week
   TTL. A morning where every feed fails falls back to the newest listings that
@@ -194,6 +201,11 @@ Three behaviours sit on top of whichever store is in use:
   says so: a `last-good` payload gets a banner naming the morning it was
   collected, and a `stale` one marks the "Events updated" row as refreshing.
 
+Fresh responses may sit at the CDN for five minutes; degraded responses are
+`no-store`, so the CDN cannot pin stale data for a day. `/api/health` exposes
+the last check, per-source duration and count, last success, and consecutive
+failures, returning 503 when the feed set is degraded.
+
 The Vercel Hobby plan limits cron jobs to once a day; the second entry in
 `vercel.json` requires a Pro plan. Trim `vercel.json` to one entry if you're
 on Hobby.
@@ -203,10 +215,14 @@ on Hobby.
 - `npm run dev` — start local development
 - `npm run build` — production build
 - `npm start` — run the production build locally
-- `npm test` — build first, then run `npm test` to server-render the page and
-  check its markup (see `tests/rendered-html.test.mjs`); the three static tests
-  run without a build, the render test needs one
+- `npm test` — self-contained production build, unit tests, and rendered-page test
+- `npm run test:unit` — fixture tests for iCalendar, scrapers, schemas, URL guards, and caching
+- `npm run test:render` — verify production HTML (requires a build)
+- `npm run typecheck` — TypeScript without emitting files
 - `npm run lint` — ESLint
+
+GitHub Actions runs install, lint, typecheck, unit tests, build, and the rendered
+page test on every pull request and push to `main`.
 
 ## Project history
 
@@ -214,5 +230,5 @@ This app started from an OpenAI "Sites" template (`vinext` on Cloudflare
 Workers, with optional D1/R2 bindings and ChatGPT sign-in helpers). Those
 platform-specific pieces have been removed so the app runs as a plain
 Next.js/Vercel deployment; the actual events-finder code was already written
-against standard Next.js APIs (`next/headers`, the App Router, Route
-Handlers) and needed no changes.
+against standard Next.js APIs (the App Router and Route Handlers) and needed no
+platform-specific runtime bindings.

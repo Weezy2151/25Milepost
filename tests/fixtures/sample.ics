@@ -1,0 +1,20 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:utc-event
+DTSTART:20260824T010000Z
+SUMMARY:UTC Evening Event
+DESCRIPTION:Starts Sunday evening in Orchard Park
+LOCATION:Orchard Park, NY
+URL:https://www.orchardparkny.gov/events/
+END:VEVENT
+BEGIN:VEVENT
+UID:weekly-event
+DTSTART;TZID=America/New_York:20260824T180000
+RRULE:FREQ=WEEKLY;COUNT=3;BYDAY=MO
+EXDATE;TZID=America/New_York:20260831T180000
+SUMMARY:Weekly Family Night
+DESCRIPTION:Games\, crafts\; and music
+LOCATION:Orchard Park Public Library
+END:VEVENT
+END:VCALENDAR

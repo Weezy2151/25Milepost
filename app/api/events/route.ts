@@ -1,41 +1,15 @@
 import { after } from "next/server";
 
-import { cacheBackendName, getCachedEntry, setCachedData } from "../../../db/cache";
-import { distanceFromOrigin, extractTown, ORIGIN, type Precision } from "../../../lib/geo";
+import { acquireCacheLock, cacheBackendName, getCachedEntry, setCachedData } from "../../../db/cache";
+import { distanceFromOrigin, extractTown, ORIGIN } from "../../../lib/geo";
 import { describe, resolveImages } from "../../../lib/enrich";
+import { eventsPayloadSchema, type EventKind, type EventsPayload, type EventSetting, type LiveEvent, type SourceHealth } from "../../../lib/events";
+import { EVENTS_HEALTH_KEY, healthSnapshotSchema, type HealthSnapshot } from "../../../lib/health";
+import { parseIcalOccurrences } from "../../../lib/ical";
+import { fetchPublicText } from "../../../lib/safe-fetch";
 import { parseErieParks, parseGrowthZone, parseStepOutBuffalo, type ScrapedEvent } from "../../../lib/scrape";
 
-type EventKind = "Fairs & festivals" | "Markets & food" | "Live music" | "Sports & active" | "Outdoors" | "Museums & culture" | "Community" | "Library";
-export type EventSetting = "indoor" | "outdoor" | "both";
-
-export type LiveEvent = {
-  id: string;
-  area: "southtowns" | "city";
-  town: string;
-  day: string;
-  date: string;
-  dateKey: string;
-  time: string;
-  title: string;
-  venue: string;
-  distance: number;
-  description: string;
-  cost: string;
-  source: string;
-  url: string;
-  mapUrl: string;
-  tags: string[];
-  accent: string;
-  image?: string;
-  today?: boolean;
-  kind: EventKind;
-  setting: EventSetting;
-  priority: number;
-  lat: number;
-  lon: number;
-  /** How precisely we placed the venue: exact, town centroid, or unknown. */
-  distancePrecision: Precision;
-};
+export type { EventSetting, LiveEvent } from "../../../lib/events";
 
 const ZONE = "America/New_York";
 
@@ -252,10 +226,7 @@ function inferSetting(title: string, description: string, venue: string, tags: s
 const FEED_TIMEOUT_MS = 12_000;
 
 async function fetchWithTimeout(url: string, headers: HeadersInit, timeoutMs = 4000): Promise<string> {
-  const signal = AbortSignal.timeout(timeoutMs);
-  const response = await fetch(url, { headers, signal });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.text();
+  return fetchPublicText(url, { headers, timeoutMs, maxBytes: 3_000_000 });
 }
 
 function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[] {
@@ -496,24 +467,6 @@ function parseTicketmaster(json: string, todayKey: string, endKey: string): Live
   });
 }
 
-function unfoldIcs(value: string) {
-  return value.replace(/\r?\n[ \t]/g, "");
-}
-
-function icsValue(block: string, name: string) {
-  return block.match(new RegExp(`^${name}(?:;[^:]*)?:(.*)$`, "mi"))?.[1]?.replace(/\\n/g, " ").replace(/\\,/g, ",").trim() ?? "";
-}
-
-function icsDate(raw: string) {
-  const digits = raw.replace(/[^0-9]/g, "");
-  return digits.length >= 8 ? `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}` : "";
-}
-
-function icsTime(raw: string) {
-  const digits = raw.replace(/[^0-9]/g, "");
-  return digits.length >= 12 ? formatTime(`${digits.slice(8, 10)}:${digits.slice(10, 12)}:00`) : "All day";
-}
-
 function inferTown(location: string, area: "southtowns" | "city") {
   const places = ["Orchard Park", "Hamburg", "West Seneca", "Eden", "Elma", "Boston", "Blasdell", "Lackawanna", "East Aurora", "Lancaster", "South Buffalo"];
   return places.find((place) => location.toLowerCase().includes(place.toLowerCase())) ?? (area === "city" ? "Buffalo" : "Orchard Park");
@@ -526,31 +479,26 @@ function place(venue: string, town: string) {
 }
 
 function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city", todayKey: string, endKey: string): LiveEvent[] {
-  const unfolded = unfoldIcs(ics);
-  return [...unfolded.matchAll(/BEGIN:VEVENT([\s\S]*?)END:VEVENT/g)].flatMap((match, index) => {
-    const block = match[1];
-    const rawStart = icsValue(block, "DTSTART");
-    const dateKey = icsDate(rawStart);
-    if (!dateKey || dateKey < todayKey || dateKey > endKey) return [];
-    const title = icsValue(block, "SUMMARY");
-    const description = cleanHtml(icsValue(block, "DESCRIPTION"));
+  return parseIcalOccurrences(ics, todayKey, endKey, ZONE).flatMap((item, index) => {
+    const { dateKey, title } = item;
+    const description = cleanHtml(item.description);
     if (!familyFriendly(title, [], description)) return [];
-    const venue = icsValue(block, "LOCATION") || source;
+    const venue = item.location || source;
     const sourceTown = source === "Town of Evans" ? "Lakeshore" : source === "West Seneca Recreation" ? "West Seneca" : source === "Hamburg Recreation" ? "Hamburg" : "";
     const town = sourceTown || inferTown(venue, defaultArea);
     const located = place(venue, town);
     if (located.distance > 25) return [];
     const area = town === "Buffalo" ? "city" : defaultArea;
     const sourceUrl = source === "Town of Orchard Park" ? "https://www.orchardparkny.gov/events/" : source === "Town of Evans" ? "https://townofevansny.gov/events/" : source === "West Seneca Recreation" ? "https://westsenecany.myrec.com/info/calendar/list.aspx" : source === "Hamburg Recreation" ? "https://www.townofhamburgny.gov/Calendar.aspx" : "https://www.buffalony.gov/calendar.aspx?CID=34&view=list";
-    const url = icsValue(block, "URL") || sourceUrl;
+    const url = item.url || sourceUrl;
     const kind = classify(title, description, source);
     const tags = [kind, source.includes("Orchard") ? "Orchard Park" : "Community"];
     const setting = inferSetting(title, description, venue, tags, kind);
 
     return [{
-      id: `ics-${source}-${index}-${dateKey}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      id: `ics-${source}-${item.uid || index}-${dateKey}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       area, town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey,
-      time: icsTime(rawStart), title, venue, ...located,
+      time: item.time, title, venue, ...located,
       description: describe(description, title, venue, town),
       cost: /\bfree\b/i.test(description) ? "Free" : "See listing",
       source, url, mapUrl: mapUrl(venue, town),
@@ -1406,34 +1354,13 @@ function dedupe(events: LiveEvent[]) {
 /** Cold refresh fans out to every feed plus image lookups; the default 10s is tight. */
 export const maxDuration = 30;
 
-export type EventsPayload = {
-  events: LiveEvent[];
-  count: number;
-  updatedAt: string;
-  window: { from: string; to: string };
-  sources: Array<{ name: string; ok: boolean; count?: number; error?: string }>;
-  mix: Record<string, number>;
-  /**
-   * How current this payload actually is, so the page can say so rather than
-   * presenting a rebuilt-from-yesterday list as this morning's.
-   *
-   *   fresh      — built inside the last hour.
-   *   stale      — past the hour, served instantly while a rebuild runs behind
-   *                the response. Still today's listings.
-   *   last-good  — every feed failed, so this is the newest payload that ever
-   *                built. `builtFor` says which morning it was built for.
-   */
-  freshness: { state: "fresh" | "stale" | "last-good"; ageSeconds: number; builtFor: string; store: string };
-};
-
 const CACHE_TTL_SECONDS = 3600;
 /** How long a payload stays servable as stale past its hour of freshness. */
 const CACHE_GRACE_SECONDS = 6 * 3600;
 /** The safety net keeps a week, so a multi-day outage still has real listings. */
 const LAST_GOOD_TTL_SECONDS = 7 * 24 * 3600;
-const CACHE_HEADERS = {
-  "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
-};
+const FRESH_CACHE_CONTROL = "public, max-age=60, s-maxage=300, stale-while-revalidate=60";
+const DEGRADED_CACHE_CONTROL = "private, no-store";
 
 function cacheKeyFor(todayKey: string) {
   return `events:balanced-v4:${todayKey}`;
@@ -1448,6 +1375,44 @@ function cacheKeyFor(todayKey: string) {
  * about which day it is; the snapshot is wrong about everything.
  */
 const LAST_GOOD_KEY = "events:balanced-v4:last-good";
+const REFRESH_LOCK_SECONDS = maxDuration + 5;
+
+function validPayload(value: unknown): EventsPayload | null {
+  const parsed = eventsPayloadSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function responseHeaders(payload: EventsPayload, cacheStatus: string) {
+  return {
+    "Cache-Control": payload.freshness.state === "fresh" ? FRESH_CACHE_CONTROL : DEGRADED_CACHE_CONTROL,
+    "X-Cache": cacheStatus,
+  };
+}
+
+async function recordSourceHealth(sources: SourceHealth[], builtFor: string) {
+  const now = new Date().toISOString();
+  const previous = await getCachedEntry<HealthSnapshot>(EVENTS_HEALTH_KEY);
+  const previousHealth = healthSnapshotSchema.safeParse(previous?.data);
+  const byName = new Map((previousHealth.success ? previousHealth.data.sources : []).map((source) => [source.name, source]));
+  const snapshot: HealthSnapshot = {
+    checkedAt: now,
+    builtFor,
+    healthy: sources.some((source) => source.ok),
+    sources: sources.map((source) => {
+      const before = byName.get(source.name);
+      return {
+        ...source,
+        lastSuccessAt: source.ok ? now : before?.lastSuccessAt,
+        consecutiveFailures: source.ok ? 0 : (before?.consecutiveFailures ?? 0) + 1,
+      };
+    }),
+  };
+  try {
+    await setCachedData(EVENTS_HEALTH_KEY, snapshot, LAST_GOOD_TTL_SECONDS, 0);
+  } catch (error) {
+    console.error("[events] failed to persist source health", error);
+  }
+}
 
 function withFreshness(
   payload: EventsPayload,
@@ -1485,12 +1450,11 @@ function ticketmasterRequest(todayKey: string, endKey: string, headers: HeadersI
     sort: "date,asc",
   });
   return [
-    (async () => ({
-      name: "Ticketmaster",
-      kind: "ticketmaster" as const,
-      area: "city" as const,
-      text: await fetchWithTimeout(`https://app.ticketmaster.com/discovery/v2/events.json?${query}`, headers, FEED_TIMEOUT_MS),
-    }))(),
+    (async () => {
+      const started = Date.now();
+      const text = await fetchWithTimeout(`https://app.ticketmaster.com/discovery/v2/events.json?${query}`, headers, FEED_TIMEOUT_MS);
+      return { name: "Ticketmaster", kind: "ticketmaster" as const, area: "city" as const, text, durationMs: Date.now() - started };
+    })(),
   ];
 }
 
@@ -1502,39 +1466,30 @@ async function buildEventsPayload(): Promise<EventsPayload> {
   // 2. Fetch live feeds with timeouts. Fewer, healthier feeds means we can
   //    afford to wait a little longer on each than the old 4s.
   const requests = [
-    ...LIBRARY_FEEDS.map(async ([name, url]) => ({
-      name,
-      kind: "library" as const,
-      text: await fetchWithTimeout(url, headers, FEED_TIMEOUT_MS),
-    })),
-    ...TRIBE_FEEDS.map(async ([name, origin, area, town]) => ({
-      name,
-      kind: "tribe" as const,
-      area: area as "southtowns" | "city",
-      town,
-      regional: name === "Buffalo Rising",
-      text: await fetchWithTimeout(
+    ...LIBRARY_FEEDS.map(async ([name, url]) => {
+      const started = Date.now();
+      const text = await fetchWithTimeout(url, headers, FEED_TIMEOUT_MS);
+      return { name, kind: "library" as const, text, durationMs: Date.now() - started };
+    }),
+    ...TRIBE_FEEDS.map(async ([name, origin, area, town]) => {
+      const started = Date.now();
+      const text = await fetchWithTimeout(
         `${origin}/wp-json/tribe/events/v1/events?start_date=${todayKey}&end_date=${endKey}&per_page=50`,
         headers,
         FEED_TIMEOUT_MS,
-      ),
-    })),
-    ...ICS_FEEDS.map(async ([name, url, area]) => ({
-      name,
-      kind: "ics" as const,
-      area: area as "southtowns" | "city",
-      text: await fetchWithTimeout(url, headers, FEED_TIMEOUT_MS),
-    })),
-    ...SCRAPED_FEEDS.map(async ([name, url, parser, area, town]) => ({
-      name,
-      kind: "scrape" as const,
-      parser,
-      area,
-      town,
-      // These are whole rendered pages rather than feeds — Step Out Buffalo's
-      // food listing is 2 MB uncompressed — so ask for the gzipped copy.
-      text: await fetchWithTimeout(url, { ...headers, "accept-encoding": "gzip, deflate" }, FEED_TIMEOUT_MS),
-    })),
+      );
+      return { name, kind: "tribe" as const, area: area as "southtowns" | "city", town, regional: name === "Buffalo Rising", text, durationMs: Date.now() - started };
+    }),
+    ...ICS_FEEDS.map(async ([name, url, area]) => {
+      const started = Date.now();
+      const text = await fetchWithTimeout(url, headers, FEED_TIMEOUT_MS);
+      return { name, kind: "ics" as const, area: area as "southtowns" | "city", text, durationMs: Date.now() - started };
+    }),
+    ...SCRAPED_FEEDS.map(async ([name, url, parser, area, town]) => {
+      const started = Date.now();
+      const text = await fetchWithTimeout(url, { ...headers, "accept-encoding": "gzip, deflate" }, FEED_TIMEOUT_MS);
+      return { name, kind: "scrape" as const, parser, area, town, text, durationMs: Date.now() - started };
+    }),
     ...ticketmasterRequest(todayKey, endKey, headers),
   ];
 
@@ -1583,7 +1538,13 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     // A feed that answers 200 with nothing usable is broken too — West Seneca
     // did exactly that for months while reporting as healthy.
     if (count === 0) console.warn(`[events] source returned no usable events: ${name}`);
-    return { name, ok: true, count };
+    return {
+      name,
+      ok: count > 0,
+      count,
+      durationMs: result.value.durationMs,
+      ...(count === 0 ? { error: "No usable events in the requested window" } : {}),
+    };
   });
 
   // 3. Merge: live feeds first, then hand-written recurring entries only where
@@ -1620,43 +1581,63 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     freshness: { state: "fresh", ageSeconds: 0, builtFor: todayKey, store: cacheBackendName() },
   };
 
+  const validated = validPayload(payload);
+  if (!validated) throw new Error("normalized events payload failed schema validation");
+  await recordSourceHealth(sources, todayKey);
+
   // 5. A build that produced nothing means every source failed at once — a
   //    network partition or a bad deploy, not a genuinely empty week. Serve
   //    the last payload that worked instead of an empty page, and do not
   //    overwrite the safety net with the failure.
-  if (withImages.length === 0) {
+  if (!sources.some((source) => source.ok)) {
     const rescued = await lastGoodPayload();
     if (rescued) return rescued;
-    return payload;
+    return validated;
   }
 
   // 6. Write both the per-day entry and the date-independent safety net.
-  await Promise.allSettled([
-    setCachedData(cacheKeyFor(todayKey), payload, CACHE_TTL_SECONDS, CACHE_GRACE_SECONDS),
-    setCachedData(LAST_GOOD_KEY, payload, LAST_GOOD_TTL_SECONDS, 0),
+  const writes = await Promise.allSettled([
+    setCachedData(cacheKeyFor(todayKey), validated, CACHE_TTL_SECONDS, CACHE_GRACE_SECONDS),
+    setCachedData(LAST_GOOD_KEY, validated, LAST_GOOD_TTL_SECONDS, 0),
   ]);
+  for (const write of writes) if (write.status === "rejected") console.error("[events] cache write failed", write.reason);
 
-  return payload;
+  return validated;
 }
 
 /** The newest payload that ever built, labelled with how old it actually is. */
 async function lastGoodPayload(): Promise<EventsPayload | null> {
   const entry = await getCachedEntry<EventsPayload>(LAST_GOOD_KEY);
-  if (!entry?.data?.events?.length) return null;
-  console.warn(`[events] serving last-good payload from ${entry.data.window?.from} (${entry.ageSeconds}s old)`);
-  return withFreshness(entry.data, "last-good", entry.ageSeconds);
+  const payload = validPayload(entry?.data);
+  if (!entry || !payload?.events.length) return null;
+  console.warn(`[events] serving last-good payload from ${payload.window.from} (${entry.ageSeconds}s old)`);
+  return withFreshness(payload, "last-good", entry.ageSeconds);
+}
+
+let localRebuild: Promise<void> | null = null;
+
+function revalidateOnce(todayKey: string) {
+  if (localRebuild) return localRebuild;
+  localRebuild = (async () => {
+    const acquired = await acquireCacheLock(`events:refresh-lock:${todayKey}`, REFRESH_LOCK_SECONDS);
+    if (!acquired) return;
+    await buildEventsPayload();
+  })().finally(() => {
+    localRebuild = null;
+  });
+  return localRebuild;
 }
 
 export async function GET() {
   const todayKey = localDateKey();
   const cached = await getCachedEntry<EventsPayload>(cacheKeyFor(todayKey));
+  const cachedPayload = validPayload(cached?.data);
 
-  if (cached?.data?.events?.length) {
+  if (cached && cachedPayload?.events.length) {
     // 1. Warm and inside the hour: serve it as-is.
     if (!cached.stale) {
-      return Response.json(withFreshness(cached.data, "fresh", cached.ageSeconds), {
-        headers: { ...CACHE_HEADERS, "X-Cache": "HIT" },
-      });
+      const payload = withFreshness(cachedPayload, "fresh", cached.ageSeconds);
+      return Response.json(payload, { headers: responseHeaders(payload, "HIT") });
     }
 
     // 2. Past the hour but inside the grace period: answer immediately from
@@ -1664,25 +1645,24 @@ export async function GET() {
     //    on a dozen live feeds just because they were the first one back.
     after(async () => {
       try {
-        await buildEventsPayload();
+        await revalidateOnce(todayKey);
       } catch (error) {
         console.error("[events] background revalidate failed", error);
       }
     });
-    return Response.json(withFreshness(cached.data, "stale", cached.ageSeconds), {
-      headers: { ...CACHE_HEADERS, "X-Cache": "STALE" },
-    });
+    const payload = withFreshness(cachedPayload, "stale", cached.ageSeconds);
+    return Response.json(payload, { headers: responseHeaders(payload, "STALE") });
   }
 
   // 3. Nothing cached: build it, and fall back to the last good payload if the
   //    build itself throws rather than merely coming back thin.
   try {
     const payload = await buildEventsPayload();
-    return Response.json(payload, { headers: { ...CACHE_HEADERS, "X-Cache": "MISS" } });
+    return Response.json(payload, { headers: responseHeaders(payload, "MISS") });
   } catch (error) {
     console.error("[events] build failed", error);
     const rescued = await lastGoodPayload();
-    if (rescued) return Response.json(rescued, { headers: { ...CACHE_HEADERS, "X-Cache": "LAST-GOOD" } });
+    if (rescued) return Response.json(rescued, { headers: responseHeaders(rescued, "LAST-GOOD") });
     throw error;
   }
 }

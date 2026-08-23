@@ -7,7 +7,8 @@
  * have real photography instead of a pattern tile.
  */
 
-import { getCachedData, setCachedData } from "../db/cache";
+import { getCachedData, setCachedData } from "../db/cache.ts";
+import { assertSafePublicUrl, EVENT_IMAGE_HOSTS, EVENT_PAGE_HOSTS, fetchPublicText } from "./safe-fetch.ts";
 
 const ENTITIES: Record<string, string> = {
   amp: "&",
@@ -116,18 +117,25 @@ function extractOgImage(html: string, pageUrl: string) {
     const match = html.match(pattern);
     if (match?.[1]) {
       const resolved = absolute(decodeEntities(match[1]).trim(), pageUrl);
-      if (resolved?.startsWith("https://")) return resolved;
+      if (resolved?.startsWith("https://")) {
+        try {
+          assertSafePublicUrl(resolved, [...EVENT_IMAGE_HOSTS]);
+          return resolved;
+        } catch {
+          continue;
+        }
+      }
     }
   }
   return null;
 }
 
 async function fetchOgImage(url: string): Promise<string | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), OG_TIMEOUT_MS);
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
+    const html = await fetchPublicText(url, {
+      timeoutMs: OG_TIMEOUT_MS,
+      maxBytes: 80_000,
+      contentTypes: ["text/html", "application/xhtml+xml"],
       headers: {
         // Same browser string the feed fetches use: event hosts 403 unknown agents.
         "user-agent":
@@ -135,15 +143,9 @@ async function fetchOgImage(url: string): Promise<string | null> {
         accept: "text/html",
       },
     });
-    if (!response.ok) return null;
-    if (!(response.headers.get("content-type") ?? "").includes("text/html")) return null;
-    // og:* lives in <head>; reading the first slice avoids pulling whole pages.
-    const html = (await response.text()).slice(0, 60_000);
     return extractOgImage(html, url);
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -155,15 +157,23 @@ async function fetchOgImage(url: string): Promise<string | null> {
  * Returns a url -> image map; misses are cached as "" so we stop retrying them.
  */
 export async function resolveImages(urls: string[]): Promise<Map<string, string>> {
-  const unique = [...new Set(urls.filter((url) => url.startsWith("https://")))];
+  const unique = [...new Set(urls.filter((url) => {
+    try {
+      assertSafePublicUrl(url, [...EVENT_PAGE_HOSTS]);
+      return true;
+    } catch {
+      return false;
+    }
+  }))];
   const resolved = new Map<string, string>();
   const pending: string[] = [];
 
-  for (const url of unique) {
-    const cached = await getCachedData<string>(ogKey(url));
+  const cachedEntries = await Promise.all(unique.map((url) => getCachedData<string>(ogKey(url))));
+  unique.forEach((url, index) => {
+    const cached = cachedEntries[index];
     if (cached === null) pending.push(url);
     else if (cached) resolved.set(url, cached);
-  }
+  });
 
   const batch = pending.slice(0, OG_BUDGET);
   await Promise.all(

@@ -19,7 +19,7 @@
  * logs that case.
  */
 
-import { decodeEntities } from "./enrich";
+import { decodeEntities } from "./enrich.ts";
 
 export type ScrapedEvent = {
   title: string;

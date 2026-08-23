@@ -1,6 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type SVGProps } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
+import { parseEventsPayload, parseStoredIds, parseStoredPlan, type Freshness, type StoredPlanItem } from "../lib/events";
+import { weatherSchema, type DayForecast, type Weather } from "../lib/weather";
 import {
   fallbackEvents,
   SNAPSHOT_DATE,
@@ -10,28 +13,9 @@ import {
   type Sort,
   type Vibe,
 } from "./events-data";
-
-/* ------------------------------------------------------------------ icons */
-
-type IconProps = SVGProps<SVGSVGElement>;
-const svg = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
-
-const IconSearch = (p: IconProps) => <svg {...svg} {...p}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>;
-const IconX = (p: IconProps) => <svg {...svg} {...p}><path d="M18 6 6 18M6 6l12 12" /></svg>;
-const IconChevron = (p: IconProps) => <svg {...svg} {...p}><path d="m6 9 6 6 6-6" /></svg>;
-const IconCheck = (p: IconProps) => <svg {...svg} {...p}><path d="m20 6-11 11-5-5" /></svg>;
-const IconClock = (p: IconProps) => <svg {...svg} {...p}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>;
-const IconPin = (p: IconProps) => <svg {...svg} {...p}><path d="M20 10c0 5.5-8 12-8 12s-8-6.5-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="2.8" /></svg>;
-const IconBookmark = (p: IconProps) => <svg {...svg} {...p}><path d="M6 4h12v17l-6-4.2L6 21V4Z" /></svg>;
-const IconPlus = (p: IconProps) => <svg {...svg} {...p}><path d="M12 5v14M5 12h14" /></svg>;
-const IconRoute = (p: IconProps) => <svg {...svg} {...p}><circle cx="6" cy="19" r="2.5" /><circle cx="18" cy="5" r="2.5" /><path d="M15.5 5H9a3 3 0 0 0 0 6h6a3 3 0 0 1 0 6H8.5" /></svg>;
-const IconShare = (p: IconProps) => <svg {...svg} {...p}><path d="M12 15V3m0 0L8 7m4-4 4 4" /><path d="M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6" /></svg>;
-const IconSun = (p: IconProps) => <svg {...svg} {...p}><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>;
-const IconMoon = (p: IconProps) => <svg {...svg} {...p}><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" /></svg>;
-const IconExternal = (p: IconProps) => <svg {...svg} {...p}><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>;
-const IconSparkle = (p: IconProps) => <svg {...svg} {...p}><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" /></svg>;
-const IconTicket = (p: IconProps) => <svg {...svg} {...p}><path d="M4 9V7a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2a3 3 0 0 0 0 6v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a3 3 0 0 0 0-6Z" /></svg>;
-const IconCopy = (p: IconProps) => <svg {...svg} {...p}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a1 1 0 0 1 1-1h9" /></svg>;
+import { FilterMenu } from "./components/filter-menu";
+import { IconBookmark, IconCheck, IconChevron, IconClock, IconCopy, IconExternal, IconMoon, IconPin, IconPlus, IconRoute, IconSearch, IconShare, IconSparkle, IconSun, IconTicket, IconX } from "./components/icons";
+import { useModal } from "./components/use-modal";
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -60,16 +44,6 @@ const SAVED_KEY = "twenty-five-mile-post-clippings";
 const PLAN_KEY = "twenty-five-mile-post-myday";
 const THEME_KEY = "twenty-five-mile-post-theme";
 
-function weatherLabel(code: number) {
-  if (code === 0) return "Clear";
-  if (code <= 3) return "Partly cloudy";
-  if (code <= 48) return "Misty";
-  if (code <= 67 || (code >= 80 && code <= 82)) return "Rain possible";
-  if (code <= 77) return "Wintry";
-  if (code >= 95) return "Storms possible";
-  return "Changeable skies";
-}
-
 /** Only "Free…" with no dollar figure counts — "12 & under free" still has a ticket price. */
 function isFree(cost: string) {
   return /^\s*free/i.test(cost) && !cost.includes("$");
@@ -90,141 +64,8 @@ function moodLabel(vibe: Vibe) {
   return MOODS.find((mood) => mood.id === vibe)?.label ?? "All";
 }
 
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select, textarea, summary, [tabindex]:not([tabindex="-1"])';
-
-/**
- * Modal plumbing for the drawers and sheet: locks page scroll, closes on
- * Escape, keeps Tab inside the panel, and hands focus back to whatever opened
- * it. Without the trap, keyboard and screen-reader users tab straight through
- * the scrim into the page behind.
- */
-function useModal(open: boolean, onClose: () => void) {
-  const panelRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const opener = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    const panel = panelRef.current;
-    const focusables = () => Array.from(panel?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []).filter((el) => el.offsetParent !== null);
-    // Focus the panel itself rather than its close button, so screen readers
-    // announce the dialog label before any control.
-    panel?.focus();
-
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusables();
-      if (items.length === 0) {
-        event.preventDefault();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      const active = document.activeElement;
-      if (event.shiftKey && (active === first || active === panel)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", onKey, true);
-      // Only steal focus back if it is still inside the panel we are closing.
-      if (!document.activeElement || document.activeElement === document.body) opener?.focus();
-    };
-  }, [open, onClose]);
-
-  return panelRef;
-}
-
-/* ------------------------------------------------------------ filter menu */
-
-type Option = { value: string; label: string };
-
-function FilterMenu({
-  label,
-  options,
-  selected,
-  defaultValue,
-  align = "left",
-  onSelect,
-}: {
-  label: string;
-  options: Option[];
-  selected: string;
-  defaultValue: string;
-  align?: "left" | "right";
-  onSelect: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const active = selected !== defaultValue;
-  const current = options.find((option) => option.value === selected);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onPointer);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onPointer);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  return (
-    <div className="fmenu" ref={ref}>
-      <button
-        type="button"
-        className={active ? "fmenu-btn on" : "fmenu-btn"}
-        aria-expanded={open}
-        aria-haspopup="true"
-        onClick={() => setOpen((value) => !value)}
-      >
-        {label}
-        <b>{active ? current?.label : "Any"}</b>
-        <IconChevron />
-      </button>
-      {open && (
-        <div className={align === "right" ? "fmenu-panel right" : "fmenu-panel"} role="menu">
-          {options.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="menuitemradio"
-              aria-checked={option.value === selected}
-              className="fmenu-opt"
-              onClick={() => {
-                onSelect(option.value);
-                setOpen(false);
-              }}
-            >
-              {option.label}
-              {option.value === selected && <IconCheck />}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+function imageSrc(source: string) {
+  return source.startsWith("/") ? source : `/api/image?url=${encodeURIComponent(source)}`;
 }
 
 /* ------------------------------------------------------------- event card */
@@ -254,7 +95,7 @@ function EventCard({
     <article className={`card accent-${event.accent}`} id={event.id}>
       <button type="button" className="card-media" onClick={() => onOpen(event)} aria-label={`Open details for ${event.title}`}>
         {event.image ? (
-          <img src={event.image} alt="" />
+          <Image src={imageSrc(event.image)} alt="" fill sizes="(max-width: 760px) 100vw, (max-width: 1080px) 50vw, 33vw" />
         ) : (
           <span className="card-pattern">
             <em>{event.tags[0]}</em>
@@ -313,6 +154,7 @@ function EventCard({
             className={inPlan ? "icon-btn on" : "icon-btn"}
             onClick={() => onTogglePlan(event)}
             aria-pressed={inPlan}
+            aria-label={inPlan ? `Remove ${event.title} from My Day` : `Add ${event.title} to My Day`}
             title={inPlan ? "Remove from My Day" : "Add to My Day"}
           >
             {inPlan ? <IconCheck /> : <IconPlus />}
@@ -322,11 +164,12 @@ function EventCard({
             className={isSaved ? "icon-btn on" : "icon-btn"}
             onClick={() => onToggleSave(event.id)}
             aria-pressed={isSaved}
+            aria-label={isSaved ? `Remove ${event.title} from saved events` : `Save ${event.title} for later`}
             title={isSaved ? "Remove from saved" : "Save for later"}
           >
             <IconBookmark />
           </button>
-          <a className="icon-btn" href={event.mapUrl} target="_blank" rel="noreferrer" title={`Directions to ${event.venue}`}>
+          <a className="icon-btn" href={event.mapUrl} target="_blank" rel="noreferrer" aria-label={`Directions to ${event.venue}`} title={`Directions to ${event.venue}`}>
             <IconPin />
           </a>
         </div>
@@ -351,13 +194,6 @@ function SkeletonCard() {
 }
 
 /* -------------------------------------------------------------- home page */
-
-/** What the API said about its own currency: fresh, stale, or a rescued copy. */
-type Freshness = { state: "fresh" | "stale" | "last-good"; ageSeconds: number; builtFor: string } | null;
-
-/** One day of the forecast, keyed by ISO date so events can look themselves up. */
-type DayForecast = { dateKey: string; label: string; high: number; low: number; rain: number; code: number };
-type Weather = { label: string; now: number; high: number; rain: number; days: DayForecast[] } | null;
 
 /** Short weather note for an event's own date — only worth showing outdoors. */
 function forecastFor(event: EventPick, days: DayForecast[]) {
@@ -417,7 +253,7 @@ export default function Home() {
     total: 0,
   });
   /** How current the API said its payload was — see `freshness` in the route. */
-  const [freshness, setFreshness] = useState<Freshness>(null);
+  const [freshness, setFreshness] = useState<Freshness | null>(null);
 
   const [kind, setKind] = useState<EventKind>("All activities");
   const [setting, setSetting] = useState<SettingFilter>("all");
@@ -430,17 +266,21 @@ export default function Home() {
   const [showSaved, setShowSaved] = useState(false);
 
   const [saved, setSaved] = useState<string[]>([]);
-  const [plan, setPlan] = useState<EventPick[]>([]);
+  const [planItems, setPlanItems] = useState<StoredPlanItem[]>([]);
   const [selected, setSelected] = useState<EventPick | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const [greeting, setGreeting] = useState("Hello, Orchard Park.");
   const [theme, setTheme] = useState<"light" | "dark" | null>(null);
-  const [weather, setWeather] = useState<Weather>(null);
+  const [weather, setWeather] = useState<Weather | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
   const [notice, setNotice] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
+  const plan = useMemo(() => planItems.flatMap((item) => eventById.get(item.id) ?? []), [planItems, eventById]);
+  const unavailablePlan = useMemo(() => planItems.filter((item) => !eventById.has(item.id)), [planItems, eventById]);
+  const planCount = planItems.length;
 
   /* ---- boot: local state, greeting, feeds ---- */
 
@@ -449,10 +289,8 @@ export default function Home() {
     // client render the same first pass; the extra render is the point, not a bug.
     /* eslint-disable react-hooks/set-state-in-effect */
     try {
-      const storedSaved = window.localStorage.getItem(SAVED_KEY);
-      if (storedSaved) setSaved(JSON.parse(storedSaved));
-      const storedPlan = window.localStorage.getItem(PLAN_KEY);
-      if (storedPlan) setPlan(JSON.parse(storedPlan));
+      setSaved(parseStoredIds(window.localStorage.getItem(SAVED_KEY)));
+      setPlanItems(parseStoredPlan(window.localStorage.getItem(PLAN_KEY)));
       const storedTheme = window.localStorage.getItem(THEME_KEY);
       if (storedTheme === "dark" || storedTheme === "light") setTheme(storedTheme);
     } catch {
@@ -461,16 +299,17 @@ export default function Home() {
 
     const hour = new Date().getHours();
     setGreeting(hour < 12 ? "Good morning, Orchard Park." : hour < 17 ? "Good afternoon, Orchard Park." : "Good evening, Orchard Park.");
+    const controller = new AbortController();
 
     (async () => {
       try {
-        const response = await fetch("/api/events?edition=balanced-v3");
+        const response = await fetch("/api/events", { signal: controller.signal });
         if (!response.ok) throw new Error("refresh failed");
-        const data = await response.json();
-        if (Array.isArray(data.events) && data.events.length) {
+        const data = parseEventsPayload(await response.json());
+        if (data?.events.length) {
           setEvents(data.events);
           setUpdatedAt(data.updatedAt);
-          const sources: Array<{ ok: boolean }> = Array.isArray(data.sources) ? data.sources : [];
+          const sources = data.sources;
           setFeed({
             state: "live",
             ok: sources.filter((source) => source.ok).length,
@@ -485,30 +324,18 @@ export default function Home() {
       }
     })();
 
-    fetch(
-      "https://api.open-meteo.com/v1/forecast?latitude=42.767&longitude=-78.744&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&temperature_unit=fahrenheit&timezone=America%2FNew_York&forecast_days=8",
-    )
-      .then((response) => response.json())
-      .then((data) => {
-        const daily = data.daily ?? {};
-        const days: DayForecast[] = (daily.time ?? []).map((dateKey: string, index: number) => ({
-          dateKey,
-          label: weatherLabel(daily.weather_code?.[index] ?? 0),
-          high: Math.round(daily.temperature_2m_max?.[index] ?? 0),
-          low: Math.round(daily.temperature_2m_min?.[index] ?? 0),
-          rain: daily.precipitation_probability_max?.[index] ?? 0,
-          code: daily.weather_code?.[index] ?? 0,
-        }));
-        setWeather({
-          label: weatherLabel(data.current.weather_code),
-          now: Math.round(data.current.temperature_2m),
-          high: days[0]?.high ?? 0,
-          rain: days[0]?.rain ?? 0,
-          days,
-        });
+    fetch("/api/weather", { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error("weather refresh failed");
+        return response.json();
+      })
+      .then((value) => {
+        const parsed = weatherSchema.safeParse(value);
+        setWeather(parsed.success ? parsed.data : null);
       })
       .catch(() => setWeather(null));
     /* eslint-enable react-hooks/set-state-in-effect */
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -645,16 +472,23 @@ export default function Home() {
   };
 
   const togglePlan = (event: EventPick) => {
-    const exists = plan.some((item) => item.id === event.id);
-    const next = exists ? plan.filter((item) => item.id !== event.id) : [...plan, event];
-    setPlan(next);
-    persist(PLAN_KEY, next);
+    const exists = planItems.some((item) => item.id === event.id);
+    const next = exists ? planItems.filter((item) => item.id !== event.id) : [...planItems, { id: event.id, title: event.title }];
+    setPlanItems(next);
+    persist(PLAN_KEY, { version: 2, items: next });
     setNotice(exists ? `Removed “${event.title}” from My Day.` : `Added “${event.title}” to My Day.`);
   };
 
+  const removePlanItem = (id: string, title: string) => {
+    const next = planItems.filter((item) => item.id !== id);
+    setPlanItems(next);
+    persist(PLAN_KEY, { version: 2, items: next });
+    setNotice(`Removed “${title}” from My Day.`);
+  };
+
   const clearPlan = () => {
-    setPlan([]);
-    persist(PLAN_KEY, []);
+    setPlanItems([]);
+    persist(PLAN_KEY, { version: 2, items: [] });
     setNotice("My Day cleared.");
   };
 
@@ -676,7 +510,10 @@ export default function Home() {
   };
 
   const copyItinerary = async () => {
-    const text = plan.map((stop, index) => `${index + 1}. ${stop.title} (${stop.time}) — ${stop.venue}, ${stop.town}`).join("\n");
+    const text = planItems.map((item, index) => {
+      const stop = eventById.get(item.id);
+      return stop ? `${index + 1}. ${stop.title} (${stop.time}) — ${stop.venue}, ${stop.town}` : `${index + 1}. ${item.title} — no longer in current listings`;
+    }).join("\n");
     try {
       await navigator.clipboard.writeText(`My Day · The 25-Mile Post\n\n${text}`);
       setNotice("Itinerary copied to clipboard.");
@@ -700,7 +537,7 @@ export default function Home() {
   const cardProps = (event: EventPick) => ({
     event,
     isSaved: saved.includes(event.id),
-    inPlan: plan.some((item) => item.id === event.id),
+    inPlan: planItems.some((item) => item.id === event.id),
     forecast: weather ? forecastFor(event, weather.days) : null,
     onToggleSave: toggleSave,
     onTogglePlan: togglePlan,
@@ -720,7 +557,7 @@ export default function Home() {
         {`${filtered.length} ${filtered.length === 1 ? "event" : "events"} match your filters for the selected day, ${todayCount} today.`}
       </p>
 
-      <header className="topbar">
+      <header className="topbar" data-modal-background>
         <div className="wrap topbar-inner">
           <a className="wordmark" href="#top">
             <span className="wordmark-mark">25</span>
@@ -740,34 +577,35 @@ export default function Home() {
           <span className="topbar-spacer" />
 
           <div className="topbar-actions">
-            <button type="button" className="icon-btn topbar-search" onClick={focusSearch} title="Search events">
+            <button type="button" className="icon-btn topbar-search" onClick={focusSearch} aria-label="Search events" title="Search events">
               <IconSearch />
             </button>
             <button
               type="button"
               className={theme === "dark" ? "icon-btn on" : "icon-btn"}
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
               title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
             >
               {theme === "dark" ? <IconSun /> : <IconMoon />}
             </button>
-            <button type="button" className="icon-btn" onClick={share} title="Share this guide">
+            <button type="button" className="icon-btn" onClick={share} aria-label="Share this guide" title="Share this guide">
               <IconShare />
             </button>
             <button
               type="button"
-              className={plan.length ? "icon-btn on topbar-myday" : "icon-btn topbar-myday"}
+              className={planCount ? "icon-btn on topbar-myday" : "icon-btn topbar-myday"}
               onClick={() => setPlanOpen(true)}
             >
               <IconRoute />
               My Day
-              {plan.length > 0 && <span className="pill-count">{plan.length}</span>}
+              {planCount > 0 && <span className="pill-count">{planCount}</span>}
             </button>
           </div>
         </div>
       </header>
 
-      <main id="top">
+      <main id="top" data-modal-background>
         {/* ------------------------------------------------------------ hero */}
         <section className="hero">
           <div className="wrap hero-grid">
@@ -1179,7 +1017,7 @@ export default function Home() {
         </div>
       </main>
 
-      <footer className="footer">
+      <footer className="footer" data-modal-background>
         <div className="wrap footer-inner">
           <div>
             <b>The 25-Mile Post</b>
@@ -1211,7 +1049,7 @@ export default function Home() {
             <div className="drawer-scroll">
               {selected.image && (
                 <div className="drawer-hero">
-                  <img src={selected.image} alt="" />
+                  <Image src={imageSrc(selected.image)} alt="" fill sizes="(max-width: 760px) 100vw, 440px" />
                 </div>
               )}
               <div className="drawer-body">
@@ -1277,7 +1115,7 @@ export default function Home() {
 
             <div className="drawer-foot">
               <button type="button" className="btn-solid" onClick={() => togglePlan(selected)}>
-                {plan.some((item) => item.id === selected.id) ? "Remove from My Day" : "Add to My Day"}
+                {planItems.some((item) => item.id === selected.id) ? "Remove from My Day" : "Add to My Day"}
               </button>
               <a className="btn-ghost" href={selected.mapUrl} target="_blank" rel="noreferrer">
                 <IconPin style={{ width: 15, height: 15 }} />
@@ -1294,7 +1132,7 @@ export default function Home() {
           <button type="button" className="scrim-hit" onClick={closePlan} aria-label="Close planner" />
           <aside className="drawer" role="dialog" aria-modal="true" aria-label="My Day planner" ref={planRef} tabIndex={-1}>
             <div className="drawer-top">
-              <strong>My Day · {plan.length} {plan.length === 1 ? "stop" : "stops"}</strong>
+              <strong>My Day · {planCount} {planCount === 1 ? "stop" : "stops"}</strong>
               <button type="button" className="icon-btn" onClick={closePlan} aria-label="Close planner">
                 <IconX />
               </button>
@@ -1302,7 +1140,7 @@ export default function Home() {
 
             <div className="drawer-scroll">
               <div className="drawer-body">
-                {plan.length === 0 ? (
+                {planCount === 0 ? (
                   <div className="empty">
                     <h3>Build your day</h3>
                     <p>
@@ -1316,45 +1154,47 @@ export default function Home() {
                 ) : (
                   <>
                     <div className="itin">
-                      {plan.map((stop, index) => (
-                        <div className="itin-row" key={stop.id}>
+                      {planItems.map((item, index) => {
+                        const stop = eventById.get(item.id);
+                        return (
+                        <div className="itin-row" key={item.id}>
                           <div className="itin-rail">
                             <span className="itin-num">{index + 1}</span>
                             <span className="itin-line" />
                           </div>
-                          <div className="itin-card">
+                          <div className={stop ? "itin-card" : "itin-card unavailable"}>
                             <div style={{ minWidth: 0 }}>
-                              <span className="itin-time">{stop.time}</span>
-                              <h4>{stop.title}</h4>
+                              <span className="itin-time">{stop?.time ?? "Unavailable"}</span>
+                              <h4>{stop?.title ?? item.title}</h4>
                               <p>
-                                {stop.venue} · {stop.town} — {stop.distance} mi
+                                {stop ? `${stop.venue} · ${stop.town} — ${stop.distance} mi` : "This event is no longer in the current listings."}
                               </p>
                             </div>
                             <button
                               type="button"
                               className="icon-btn"
-                              onClick={() => togglePlan(stop)}
-                              aria-label={`Remove ${stop.title} from My Day`}
+                              onClick={() => removePlanItem(item.id, stop?.title ?? item.title)}
+                              aria-label={`Remove ${stop?.title ?? item.title} from My Day`}
                             >
                               <IconX />
                             </button>
                           </div>
                         </div>
-                      ))}
+                      );})}
                     </div>
                     <p style={{ margin: 0, color: "var(--text-3)", fontSize: 12.5 }}>
-                      {plan.length === 1
+                      {plan.length === 1 && unavailablePlan.length === 0
                         ? `${plan[0].distance} miles from Orchard Park.`
-                        : `Stops range ${Math.min(...plan.map((stop) => stop.distance))}–${Math.max(
+                        : plan.length > 0 ? `Available stops range ${Math.min(...plan.map((stop) => stop.distance))}–${Math.max(
                             ...plan.map((stop) => stop.distance),
-                          )} miles from Orchard Park.`}
+                          )} miles from Orchard Park.` : "Saved stops are currently unavailable."}
                     </p>
                   </>
                 )}
               </div>
             </div>
 
-            {plan.length > 0 && (
+            {planCount > 0 && (
               <div className="drawer-foot">
                 <button type="button" className="btn-solid" onClick={copyItinerary}>
                   <IconCopy style={{ width: 15, height: 15 }} />
@@ -1445,10 +1285,10 @@ export default function Home() {
         </div>
       )}
 
-      <button type="button" className="fab" onClick={() => setPlanOpen(true)}>
+      <button type="button" className="fab" onClick={() => setPlanOpen(true)} data-modal-background>
         <IconRoute />
         My Day
-        {plan.length > 0 && <span className="pill-count">{plan.length}</span>}
+        {planCount > 0 && <span className="pill-count">{planCount}</span>}
       </button>
 
       {notice && (

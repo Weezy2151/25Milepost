@@ -1,46 +1,14 @@
-export type Area = "southtowns" | "city";
-export type EventKind =
-  | "All activities"
-  | "Fairs & festivals"
-  | "Markets & food"
-  | "Live music"
-  | "Sports & active"
-  | "Outdoors"
-  | "Museums & culture"
-  | "Community"
-  | "Library";
+import type { EventKind as ActivityKind, LiveEvent } from "../lib/events";
+
+export type { Area } from "../lib/events";
+export type EventKind = "All activities" | ActivityKind;
 export type SettingFilter = "all" | "indoor" | "outdoor";
 export type Vibe = "all" | "outside" | "kids" | "food" | "evening" | "rain" | "drive";
 export type Sort = "recommended" | "closest";
 
-export type EventPick = {
-  id: string;
-  area: Area;
-  town: string;
-  day: string;
-  date: string;
-  dateKey?: string;
-  time: string;
-  title: string;
-  venue: string;
-  distance: number;
-  description: string;
-  cost: string;
-  source: string;
-  url: string;
-  mapUrl: string;
-  tags: string[];
-  accent: string;
-  image?: string;
-  today?: boolean;
-  kind?: Exclude<EventKind, "All activities">;
-  setting?: "indoor" | "outdoor" | "both";
-  priority?: number;
-  lat?: number;
-  lon?: number;
-  /** How precisely the venue was placed: exact venue, town centroid, or unknown. */
-  distancePrecision?: "venue" | "town" | "region";
-};
+type OptionalLiveFields = "dateKey" | "kind" | "setting" | "priority" | "lat" | "lon" | "distancePrecision";
+/** Fallback snapshots predate the normalized live contract, so enrichment fields remain optional only here. */
+export type EventPick = Omit<LiveEvent, OptionalLiveFields> & Partial<Pick<LiveEvent, OptionalLiveFields>>;
 
 /**
  * The bundled snapshot is a point-in-time copy, not live data. Surfacing the

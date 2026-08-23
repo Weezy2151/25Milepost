@@ -50,6 +50,7 @@ type Backend = {
   name: string;
   get(key: string): Promise<string | null>;
   set(key: string, value: string, ttlSeconds: number): Promise<void>;
+  acquire(key: string, ttlSeconds: number): Promise<boolean>;
 };
 
 const memoryCache = new Map<string, { value: string; expiresAt: number }>();
@@ -66,7 +67,16 @@ const memoryBackend: Backend = {
     return entry.value;
   },
   async set(key, value, ttlSeconds) {
+    const now = Date.now();
+    for (const [cachedKey, entry] of memoryCache) if (entry.expiresAt <= now) memoryCache.delete(cachedKey);
+    while (memoryCache.size >= 1_000) memoryCache.delete(memoryCache.keys().next().value!);
     memoryCache.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+  },
+  async acquire(key, ttlSeconds) {
+    const existing = memoryCache.get(key);
+    if (existing && existing.expiresAt > Date.now()) return false;
+    memoryCache.set(key, { value: "locked", expiresAt: Date.now() + ttlSeconds * 1000 });
+    return true;
   },
 };
 
@@ -104,6 +114,15 @@ function redisBackend(): Backend | null {
         cache: "no-store",
       });
       if (!response.ok) throw new Error(`cache SET ${response.status}`);
+    },
+    async acquire(key, ttlSeconds) {
+      const response = await fetch(
+        `${origin}/set/${encodeURIComponent(key)}/locked?NX=true&EX=${Math.max(1, Math.round(ttlSeconds))}`,
+        { method: "POST", headers: auth, signal: AbortSignal.timeout(2000), cache: "no-store" },
+      );
+      if (!response.ok) throw new Error(`cache lock ${response.status}`);
+      const body = (await response.json()) as { result?: string | null };
+      return body.result === "OK";
     },
   };
 }
@@ -146,7 +165,7 @@ export async function getCachedEntry<T>(key: string): Promise<CacheEntry<T> | nu
   } catch {
     return null;
   }
-  if (!envelope || typeof envelope.storedAt !== "number") return null;
+  if (!envelope || typeof envelope.storedAt !== "number" || typeof envelope.freshUntil !== "number" || !("data" in envelope)) return null;
 
   const now = Date.now();
   return {
@@ -177,4 +196,17 @@ export async function setCachedData<T>(
   const now = Date.now();
   const envelope: Envelope<T> = { storedAt: now, freshUntil: now + ttlSeconds * 1000, data };
   await backend().set(key, JSON.stringify(envelope), ttlSeconds + graceSeconds);
+}
+
+/**
+ * Acquire a short lease used to collapse stale-cache rebuilds across instances.
+ * If the shared store is unavailable we favor availability and let the caller
+ * rebuild; the route also has an in-process single-flight guard.
+ */
+export async function acquireCacheLock(key: string, ttlSeconds: number): Promise<boolean> {
+  try {
+    return await backend().acquire(key, ttlSeconds);
+  } catch {
+    return true;
+  }
 }
