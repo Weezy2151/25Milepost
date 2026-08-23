@@ -23,8 +23,9 @@ Then open `http://localhost:3000`.
   fallback snapshot (`app/events-data.ts`, dated `SNAPSHOT_DATE`) so the page
   never shows a blank state, then refreshes itself from `/api/events` once
   mounted.
-- `app/api/events/route.ts` fetches eight live feeds — library RSS, two
-  Events Calendar REST APIs, and four iCalendar feeds — merges in known
+- `app/api/events/route.ts` fetches eleven live sources — library RSS, two
+  Events Calendar REST APIs, four iCalendar feeds and three scraped HTML
+  listings — merges in known
   recurring/seasonal events where no live feed already covers them, geocodes
   venues (`lib/geo.ts`), cleans descriptions and resolves preview images
   (`lib/enrich.ts`), and returns the combined, deduped, sorted list.
@@ -50,6 +51,8 @@ Fetched live on each refresh (see the feed tables at the top of
 | Town of Evans | iCalendar | Evans / Angola / Derby |
 | Southtowns Regional Chamber | iCalendar | Hamburg and Southtowns business events |
 | Explore & More | iCalendar | Children's museum programming |
+| Step Out Buffalo (2 pages) | Scraped HTML | Trivia, bar bingo, brewery tastings, open mics |
+| East Aurora Chamber | Scraped HTML (schema.org) | East Aurora village events |
 
 Two hand-maintained layers sit alongside them: `RECURRING_TEMPLATES` (weekly
 seasonal staples) and `featuredMajorEvents` (a short marquee list). Recurring
@@ -83,12 +86,37 @@ Two things to know before adding one:
   sources drop any event they cannot actually place. Add out-of-range towns to
   `TOWNS` in `lib/geo.ts` so they resolve and then get filtered.
 
+### Scraped sources
+
+Two listings publish nothing machine-readable and cover something no feed does,
+so `lib/scrape.ts` parses their rendered HTML:
+
+- **Step Out Buffalo** is the region's only reliable listing of weekly trivia,
+  bar bingo and brewery tastings. Its WordPress install exposes no events
+  endpoint and it serves no iCal or RSS. Cards are parsed out of
+  `/music-nightlife/` and `/food-drink-events/`.
+- **East Aurora Chamber** runs on GrowthZone, which marks each card up with
+  schema.org microdata — dates come from `itemprop` meta tags rather than
+  display text, which makes it the sturdier of the two.
+
+Both are regional listings, so `parseScraped` drops anything it cannot place in
+a known town, and caps each scraped source at four events a day so a single
+night of bar events cannot crowd out the rest of the list. Step Out Buffalo's
+pages also mix real events with standing restaurant promotion, so a listing has
+to read as an event by its title or the site's own category label to be kept —
+see `NIGHTLIFE_EVENT` and `STANDING_PROMOTION` in the route.
+
+Scraping breaks when markup moves. The signal is a source that suddenly reports
+`count: 0` in the payload's `sources` array; the route already logs that case.
+
 Known dead ends, checked 2026-08-23: `townofhamburgny.gov` and
 `buffalony.gov` do not respond at all; West Seneca's iCalendar feed returns a
-valid but permanently empty calendar. All five were removed. Step Out Buffalo,
-Visit Buffalo Niagara and the Buffalo Zoo publish no usable feed — Step Out
-Buffalo is the region's best listing for trivia nights and beer tastings and
-would need an HTML scraper.
+valid but permanently empty calendar. All five were removed. For East Aurora:
+`eastaurorany.com` (the Advertiser) does not answer at all, the village
+calendar at `eastaurora.gov` is board and commission meetings only, the Roycroft
+Campus runs The Events Calendar but has posted nothing since 2025, and
+`eastauroraevents.com` is one venue rather than a calendar — its weekend flea
+market is carried as a recurring template instead.
 
 ## Deploying to Vercel
 

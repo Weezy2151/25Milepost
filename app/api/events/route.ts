@@ -1,6 +1,7 @@
 import { getCachedData, setCachedData } from "../../../db/cache";
 import { distanceFromOrigin, extractTown, ORIGIN, type Precision } from "../../../lib/geo";
 import { describe, resolveImages } from "../../../lib/enrich";
+import { parseGrowthZone, parseStepOutBuffalo, type ScrapedEvent } from "../../../lib/scrape";
 
 type EventKind = "Fairs & festivals" | "Markets & food" | "Live music" | "Sports & active" | "Outdoors" | "Museums & culture" | "Community" | "Library";
 export type EventSetting = "indoor" | "outdoor" | "both";
@@ -73,6 +74,24 @@ const ICS_FEEDS = [
   ["Town of Evans", "https://townofevansny.gov/events/month/?ical=1&shortcode=a96c91f8", "southtowns"],
   ["Southtowns Regional Chamber", "https://southtownsregionalchamber.org/?post_type=tribe_events&ical=1&eventDisplay=list", "southtowns"],
   ["Explore & More", "https://exploreandmore.org/events/?ical=1", "city"],
+] as const;
+
+/**
+ * Listings worth having that publish no feed at all, scraped from HTML.
+ *
+ * Step Out Buffalo carries the region's weekly trivia, bar bingo and brewery
+ * tastings and nothing else does — no iCal, no RSS, and its WordPress install
+ * exposes no events endpoint. The East Aurora Chamber is the only East Aurora
+ * calendar in a machine-readable shape: the Advertiser's site does not answer,
+ * and the village posts nothing but board meetings.
+ *
+ * `kind` picks the parser; `town` is the fallback patch for a source whose
+ * cards carry no address of their own.
+ */
+const SCRAPED_FEEDS = [
+  ["Step Out Buffalo", "https://stepoutbuffalo.com/music-nightlife/", "stepout", "southtowns", ""],
+  ["Step Out Buffalo · Food & Drink", "https://stepoutbuffalo.com/food-drink-events/", "stepout", "southtowns", ""],
+  ["East Aurora Chamber", "https://business.eanycc.com/eventcalendar", "growthzone", "southtowns", "East Aurora"],
 ] as const;
 
 const branchInfo: Record<string, { town: string; distance: number; area: "southtowns" | "city" }> = {
@@ -152,12 +171,30 @@ function titleCase(value: string) {
 }
 
 function mapUrl(venue: string, town: string) {
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${venue} ${town} NY`)}`;
+  // Sources that carry no venue pass an empty string; dropping it keeps the
+  // query from reading "East Aurora East Aurora NY".
+  const query = [venue, venue.toLowerCase().includes(town.toLowerCase()) ? "" : town, "NY"].filter(Boolean).join(" ");
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query.trim())}`;
 }
 
-function familyFriendly(title: string, audiences: string[], description: string) {
+/**
+ * Closed municipal business and nightlife nobody is browsing a day out for.
+ * Excluded from every source regardless of audience.
+ */
+const NOT_AN_OUTING =
+  /nightclub|bar crawl|pub crawl|burlesque|casino night|board meeting|planning board|zoning|public hearing|work session|commission meeting|committee meeting|council meeting|court calendar|budget hearing|caucus|fundraiser donation drop off/;
+
+/**
+ * An explicit age gate. Disqualifying on a municipal or library listing, but
+ * routine on the trivia and tasting listings this app deliberately carries —
+ * so sources that are adult by design pass `allowAgeGated` and label the card.
+ */
+const AGE_GATED = /adult only|adults only|ages 21|21\+|18\+|cocktail/;
+
+function familyFriendly(title: string, audiences: string[], description: string, allowAgeGated = false) {
   const text = `${title} ${description}`.toLowerCase();
-  if (/adult only|adults only|ages 21|21\+|18\+|nightclub|bar crawl|pub crawl|cocktail|burlesque|casino night|board meeting|planning board|zoning|public hearing|work session|commission meeting|committee meeting|council meeting|court calendar|budget hearing|caucus|fundraiser donation drop off/.test(text)) return false;
+  if (NOT_AN_OUTING.test(text)) return false;
+  if (!allowAgeGated && AGE_GATED.test(text)) return false;
   if (audiences.length === 0) return true;
   return audiences.some((audience) => /child|teen|all ages|family|young adult/i.test(audience));
 }
@@ -519,6 +556,109 @@ function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city
   });
 }
 
+/* ------------------------------------------------- scraped HTML listings */
+
+/**
+ * Step Out Buffalo's food and nightlife pages mix real events with standing
+ * restaurant promotion — "Pizza of the Month", "1/2 Priced Crowler Mondays",
+ * a permanent happy hour. Only things that actually happen at a time earn a
+ * card, so a listing has to read as an event either by its title or by the
+ * site's own category label before it is kept. The whitelist is deliberately
+ * tight: a missed trivia night costs less than a page of drink specials.
+ */
+const NIGHTLIFE_CATEGORY = /trivia|bar games|tastings|nightlife|comedy/i;
+const NIGHTLIFE_EVENT =
+  /trivia|quiz night|\bbingo\b|tasting|first taste|tap takeover|beer (?:&|and) wine|beer fest|brew fest|craft beer week|wine walk|wine fest|grape (?:&|and) wine|cask ale|firkin|oktoberfest|ale trail|flight night|euchre|open mic|karaoke|murder mystery|paint (?:&|and) sip|comedy/i;
+const STANDING_PROMOTION =
+  /dish alert|pizza of the month|half[- ]?off|1\/2 price|\bspecials?\b|new menu|now serving|happy hour|\bdeal\b/i;
+
+/** Chamber calendars are half member networking; that is not a day out. */
+const MEMBER_BUSINESS =
+  /chamber connections|book club|ribbon cutting|networking|mixer|luncheon|board of directors|annual meeting/i;
+
+function isNightlifeEvent(item: ScrapedEvent) {
+  if (STANDING_PROMOTION.test(item.title)) return false;
+  return NIGHTLIFE_EVENT.test(item.title) || NIGHTLIFE_CATEGORY.test(item.category);
+}
+
+/** Stable per-event id fragment: the listing's own slug, not its position. */
+function slugOf(url: string) {
+  return (url.split("?")[0].replace(/\/+$/, "").split("/").pop() ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
+}
+
+/**
+ * Turn scraped cards into events.
+ *
+ * Both scraped sources are regional rather than local — Step Out Buffalo lists
+ * Jamestown and Niagara County alongside Orchard Park — so anything that cannot
+ * be placed in a known town is dropped rather than allowed the flattering
+ * UNKNOWN_DISTANCE fallback. `defaultTown` covers the one source whose cards
+ * carry no address at all, the East Aurora Chamber.
+ */
+function parseScraped(
+  items: ScrapedEvent[],
+  source: string,
+  parser: "stepout" | "growthzone",
+  defaultArea: "southtowns" | "city",
+  defaultTown: string,
+  todayKey: string,
+  endKey: string,
+): LiveEvent[] {
+  const nightlife = parser === "stepout";
+
+  const events = items.flatMap((item, index): LiveEvent[] => {
+    if (item.end < todayKey || item.start > endKey) return [];
+    // A run that started before today still belongs on today's list.
+    const dateKey = item.start < todayKey ? todayKey : item.start;
+
+    const context = `${item.description} ${item.category}`;
+    if (!familyFriendly(item.title, [], context, nightlife)) return [];
+    if (nightlife && !isNightlifeEvent(item)) return [];
+    if (!nightlife && MEMBER_BUSINESS.test(item.title)) return [];
+
+    const town = titleCase(extractTown(`${item.venue} ${item.address}`) ?? "") || defaultTown;
+    if (!town) return [];
+    // The chamber calendar names no venue, so the village itself is the label.
+    const venue = item.venue || `Village of ${town}`;
+    const located = place(venue, town);
+    if (located.distance > 25 || located.distancePrecision === "region") return [];
+
+    const kind = classify(item.title, context, source);
+    const tags = [kind, item.category, item.recurring ? "Runs weekly" : "", AGE_GATED.test(`${item.title} ${context}`.toLowerCase()) ? "21+" : ""]
+      .filter(Boolean)
+      .slice(0, 4);
+
+    return [{
+      id: `scrape-${slugOf(item.url) || index}-${dateKey}`,
+      area: town.toLowerCase() === "buffalo" ? "city" : defaultArea,
+      town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey,
+      time: item.time,
+      title: item.title, venue, ...located,
+      description: describe(item.description, item.title, venue, town),
+      cost: /\bfree\b/i.test(`${item.title} ${item.description}`) ? "Free" : "See listing",
+      source, url: item.url, mapUrl: mapUrl(item.venue, town),
+      tags,
+      accent: ["purple", "sky", "coral", "mint", "sun"][index % 5],
+      image: item.image,
+      today: dateKey === todayKey,
+      kind, setting: inferSetting(item.title, item.description, venue, tags, kind),
+      // Below the municipal and marquee listings: a weekly bar night is a
+      // nice-to-know, not the reason to open the app.
+      priority: nightlife ? 5 : 7,
+    }];
+  });
+
+  // One venue can run trivia, bingo and a tasting on the same night. Cap the
+  // scraped sources per day so they cannot crowd out the rest of a day's list.
+  const perDay = new Map<string, number>();
+  return events.filter((event) => {
+    const count = perDay.get(event.dateKey) ?? 0;
+    if (count >= 4) return false;
+    perDay.set(event.dateKey, count + 1);
+    return true;
+  });
+}
+
 type RecurringTemplate = {
   idPrefix: string;
   dayOfWeek: number; // 0 = Sun, 1 = Mon, ..., 6 = Sat
@@ -824,6 +964,24 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     priority: 7,
   },
   {
+    idPrefix: "east-aurora-flea-sat",
+    dayOfWeek: 6,
+    area: "southtowns",
+    town: "East Aurora",
+    time: "9 AM–4:30 PM · gates 8:30",
+    title: "East Aurora Flea & Farmers Market",
+    venue: "Gallery 20A · 11167 Big Tree Rd",
+    distance: 12,
+    description: "Farm produce, antiques, collectibles and general merchandise fill 180,000 square feet of indoor and outdoor expo space every weekend.",
+    cost: "Free entry",
+    source: "East Aurora Events",
+    url: "https://eastauroraevents.com/east-aurora-flea-market",
+    tags: ["Flea market", "Antiques", "Produce"],
+    kind: "Markets & food",
+    setting: "both",
+    priority: 7,
+  },
+  {
     idPrefix: "op-depot-museum",
     dayOfWeek: 6,
     area: "southtowns",
@@ -861,6 +1019,24 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     kind: "Markets & food",
     setting: "outdoor",
     priority: 8,
+  },
+  {
+    idPrefix: "east-aurora-flea-sun",
+    dayOfWeek: 0,
+    area: "southtowns",
+    town: "East Aurora",
+    time: "9 AM–4:30 PM · gates 8:30",
+    title: "East Aurora Flea & Farmers Market",
+    venue: "Gallery 20A · 11167 Big Tree Rd",
+    distance: 12,
+    description: "The Sunday half of the weekend market, with the same mix of farm stands, antiques dealers and general merchandise indoors and out.",
+    cost: "Free entry",
+    source: "East Aurora Events",
+    url: "https://eastauroraevents.com/east-aurora-flea-market",
+    tags: ["Flea market", "Antiques", "Produce"],
+    kind: "Markets & food",
+    setting: "both",
+    priority: 7,
   },
   {
     idPrefix: "eden-farmers-market",
@@ -1237,7 +1413,7 @@ const CACHE_HEADERS = {
 };
 
 function cacheKeyFor(todayKey: string) {
-  return `events:balanced-v3:${todayKey}`;
+  return `events:balanced-v4:${todayKey}`;
 }
 
 /**
@@ -1308,6 +1484,16 @@ async function buildEventsPayload(): Promise<EventsPayload> {
       area: area as "southtowns" | "city",
       text: await fetchWithTimeout(url, headers, FEED_TIMEOUT_MS),
     })),
+    ...SCRAPED_FEEDS.map(async ([name, url, parser, area, town]) => ({
+      name,
+      kind: "scrape" as const,
+      parser: parser as "stepout" | "growthzone",
+      area: area as "southtowns" | "city",
+      town,
+      // These are whole rendered pages rather than feeds — Step Out Buffalo's
+      // food listing is 2 MB uncompressed — so ask for the gzipped copy.
+      text: await fetchWithTimeout(url, { ...headers, "accept-encoding": "gzip, deflate" }, FEED_TIMEOUT_MS),
+    })),
     ...ticketmasterRequest(todayKey, endKey, headers),
   ];
 
@@ -1317,6 +1503,7 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     ...LIBRARY_FEEDS.map(([name]) => name),
     ...TRIBE_FEEDS.map(([name]) => name),
     ...ICS_FEEDS.map(([name]) => name),
+    ...SCRAPED_FEEDS.map(([name]) => name),
     ...(hasTicketmasterKey() ? ["Ticketmaster"] : []),
   ];
 
@@ -1338,6 +1525,14 @@ async function buildEventsPayload(): Promise<EventsPayload> {
       );
     } else if (result.value.kind === "ticketmaster") {
       events.push(...parseTicketmaster(result.value.text, todayKey, endKey));
+    } else if (result.value.kind === "scrape") {
+      const scraped =
+        result.value.parser === "stepout"
+          ? parseStepOutBuffalo(result.value.text, todayKey)
+          : parseGrowthZone(result.value.text);
+      events.push(
+        ...parseScraped(scraped, name, result.value.parser, result.value.area, result.value.town, todayKey, endKey),
+      );
     } else {
       events.push(...parseIcs(result.value.text, name, result.value.area, todayKey, endKey));
     }

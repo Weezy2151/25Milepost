@@ -189,20 +189,36 @@ function lookupVenue(venue: string): Coords | null {
  * Pull a known town out of a free-text address.
  *
  * Wide-net feeds put the location in a single string ("104 Aurora Ave, West
- * Seneca, NY") with no separate town field. Matching is on whole words and
- * prefers the longest hit, so that address resolves to West Seneca rather than
- * to the "Aurora" in the street name, and "East Aurora" beats plain "Aurora".
+ * Seneca, NY") with no separate town field, and Erie County street names are
+ * full of other towns: Gene McCarthy's sits at 73 Hamburg Street in Buffalo,
+ * and Woodlawn Beach is on Lake Shore Road in Blasdell. So a hit that sits
+ * where the city belongs — right before the state or the ZIP — outranks a
+ * longer one buried in the street line. Length breaks the remaining ties, which
+ * is what keeps "East Aurora" ahead of the "Aurora" inside it, and a later
+ * position breaks the rest.
  */
 export function extractTown(text: string): string | null {
   const key = normalise(text);
   if (!key) return null;
-  let best: string | null = null;
+
+  let best: { name: string; rank: number; index: number } | null = null;
   // Town keys are plain letters and spaces, so they need no regex escaping.
   for (const name of Object.keys(TOWNS)) {
-    if (best && name.length <= best.length) continue;
-    if (new RegExp(`\\b${name}\\b`).test(key)) best = name;
+    const match = key.match(new RegExp(`\\b${name}\\b`));
+    if (!match) continue;
+    const index = match.index ?? 0;
+    // 2 = reads as the city line, 1 = a bare mention anywhere.
+    const rank = new RegExp(`\\b${name}\\b\\s*(?:ny\\b|\\d{5}\\b)`).test(key) ? 2 : 1;
+    if (
+      !best ||
+      rank > best.rank ||
+      (rank === best.rank &&
+        (name.length > best.name.length || (name.length === best.name.length && index > best.index)))
+    ) {
+      best = { name, rank, index };
+    }
   }
-  return best;
+  return best?.name ?? null;
 }
 
 /** Great-circle distance in statute miles. */
