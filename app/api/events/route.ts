@@ -56,9 +56,9 @@ const ICS_FEEDS = [
 /**
  * Listings worth having that publish no feed at all, scraped from HTML.
  *
- * Step Out Buffalo carries the region's weekly trivia, bar bingo and brewery
- * tastings and nothing else does — no iCal, no RSS, and its WordPress install
- * exposes no events endpoint. The East Aurora Chamber is the only East Aurora
+ * Step Out Buffalo carries the region's broadest day-by-day event inventory —
+ * no iCal, no RSS, and its WordPress install exposes no events endpoint. The
+ * East Aurora Chamber is the only East Aurora
  * calendar in a machine-readable shape: the Advertiser's site does not answer,
  * and the village posts nothing but board meetings.
  *
@@ -68,8 +68,7 @@ const ICS_FEEDS = [
 type ScrapeParser = "stepout" | "growthzone" | "erieparks";
 
 const SCRAPED_FEEDS: ReadonlyArray<readonly [string, string, ScrapeParser, "southtowns" | "city", string]> = [
-  ["Step Out Buffalo", "https://stepoutbuffalo.com/music-nightlife/", "stepout", "southtowns", ""],
-  ["Step Out Buffalo · Food & Drink", "https://stepoutbuffalo.com/food-drink-events/", "stepout", "southtowns", ""],
+  ["Step Out Buffalo", "https://stepoutbuffalo.com/all-events/", "stepout", "southtowns", ""],
   ["East Aurora Chamber", "https://business.eanycc.com/eventcalendar", "growthzone", "southtowns", "East Aurora"],
   ["Erie County Parks", "https://www3.erie.gov/parks/events", "erieparks", "southtowns", ""],
 ] as const;
@@ -333,8 +332,9 @@ function parseTribe(
 
   return items.flatMap((item, index) => {
     const start = item.start_date ?? "";
-    const dateKey = start.slice(0, 10);
-    if (!dateKey || dateKey < todayKey || dateKey > endKey) return [];
+    const startKey = start.slice(0, 10);
+    const itemEndKey = (item.end_date ?? start).slice(0, 10);
+    if (!startKey || itemEndKey < todayKey || startKey > endKey) return [];
 
     const title = cleanHtml(item.title ?? "");
     if (!title) return [];
@@ -358,7 +358,7 @@ function parseTribe(
     const tags = [kind, ...categories.slice(0, 2)].filter(Boolean);
     const cost = cleanHtml(item.cost ?? "") || (/\bfree\b/i.test(description) ? "Free" : "See listing");
 
-    return [{
+    return dateKeysInRange(startKey, itemEndKey, todayKey, endKey).map((dateKey) => ({
       id: `tribe-${source}-${item.id ?? index}-${dateKey}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       area, town: resolvedTown, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey,
       time: tribeTime(start, item.all_day === true),
@@ -373,7 +373,7 @@ function parseTribe(
       kind, setting: inferSetting(title, description, venue, tags, kind),
       // Above municipal listings, below the hand-picked marquee events.
       priority: kind === "Community" ? 5 : 6,
-    }];
+    }));
   });
 }
 
@@ -513,26 +513,34 @@ function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city
 /* ------------------------------------------------- scraped HTML listings */
 
 /**
- * Step Out Buffalo's food and nightlife pages mix real events with standing
- * restaurant promotion — "Pizza of the Month", "1/2 Priced Crowler Mondays",
- * a permanent happy hour. Only things that actually happen at a time earn a
- * card, so a listing has to read as an event either by its title or by the
- * site's own category label before it is kept. The whitelist is deliberately
- * tight: a missed trivia night costs less than a page of drink specials.
+ * Step Out Buffalo mixes real events with standing restaurant promotions.
+ * Keep its event inventory broad, while still dropping offers that are plainly
+ * menu advertisements rather than something happening at a particular time.
  */
-const NIGHTLIFE_CATEGORY = /trivia|bar games|tastings|nightlife|comedy/i;
-const NIGHTLIFE_EVENT =
-  /trivia|quiz night|\bbingo\b|tasting|first taste|tap takeover|beer (?:&|and) wine|beer fest|brew fest|craft beer week|wine walk|wine fest|grape (?:&|and) wine|cask ale|firkin|oktoberfest|ale trail|flight night|euchre|open mic|karaoke|murder mystery|paint (?:&|and) sip|comedy/i;
 const STANDING_PROMOTION =
-  /dish alert|pizza of the month|half[- ]?off|1\/2 price|\bspecials?\b|new menu|now serving|happy hour|\bdeal\b/i;
+  /dish alert|pizza of the month|half[- ]?off|1\/2 price|\bspecials?\b|new menu|now serving|happy hour|\bdeal\b|new dish|menu item/i;
+
+/** Listings that are technically scheduled but weak as a recommendation. */
+const ROUTINE_FILLER =
+  /church services?|toastmasters|weekly meetings?|networking|business related|sunday brunch|brunch (?:at|@|in the)|open studio hours?/i;
+
+/** Signals that an event is likely worth making a plan around. */
+const HIGH_INTEREST =
+  /festival|concert|live music|comedy|theat(?:er|re)|tour\b|fair\b|market|workshop|class\b|parade|fireworks|film|movie|art show|craft show|tasting|trivia|bingo|hike|walk\b|run\b|yoga|dance|game\b|kids|family|museum|exhibit/i;
 
 /** Chamber calendars are half member networking; that is not a day out. */
 const MEMBER_BUSINESS =
   /chamber connections|book club|ribbon cutting|networking|mixer|luncheon|board of directors|annual meeting/i;
 
-function isNightlifeEvent(item: ScrapedEvent) {
-  if (STANDING_PROMOTION.test(item.title)) return false;
-  return NIGHTLIFE_EVENT.test(item.title) || NIGHTLIFE_CATEGORY.test(item.category);
+function stepOutInterest(item: ScrapedEvent) {
+  const text = `${item.title} ${item.category}`;
+  if (/cancelled|canceled/i.test(text)) return -100;
+  let score = HIGH_INTEREST.test(text) ? 6 : 2;
+  if (/festival|concert|comedy|theat(?:er|re)|tour\b|fair\b|parade|fireworks/i.test(text)) score += 3;
+  if (ROUTINE_FILLER.test(text)) score -= 8;
+  if (item.recurring) score -= 1;
+  if (item.end > item.start) score -= 1;
+  return score;
 }
 
 /** Stable per-event id fragment: the listing's own slug, not its position. */
@@ -558,17 +566,15 @@ function parseScraped(
   todayKey: string,
   endKey: string,
 ): LiveEvent[] {
-  const nightlife = parser === "stepout";
+  const stepOut = parser === "stepout";
 
-  const events = items.flatMap((item, index): LiveEvent[] => {
+  const scoredEvents = items.flatMap((item, index): Array<{ event: LiveEvent; interest: number }> => {
     if (item.end < todayKey || item.start > endKey) return [];
-    // A run that started before today still belongs on today's list.
-    const dateKey = item.start < todayKey ? todayKey : item.start;
-
     const context = `${item.description} ${item.category}`;
-    if (!familyFriendly(item.title, [], context, nightlife)) return [];
-    if (nightlife && !isNightlifeEvent(item)) return [];
-    if (!nightlife && MEMBER_BUSINESS.test(item.title)) return [];
+    if (!familyFriendly(item.title, [], context, stepOut)) return [];
+    const interest = stepOut ? stepOutInterest(item) : 0;
+    if (stepOut && (STANDING_PROMOTION.test(item.title) || interest < 0)) return [];
+    if (!stepOut && MEMBER_BUSINESS.test(item.title)) return [];
 
     const town = titleCase(extractTown(`${item.venue} ${item.address}`) ?? "") || defaultTown;
     if (!town) return [];
@@ -582,37 +588,46 @@ function parseScraped(
       .filter(Boolean)
       .slice(0, 4);
 
-    return [{
-      id: `scrape-${slugOf(item.url) || index}-${dateKey}`,
-      area: town.toLowerCase() === "buffalo" ? "city" : defaultArea,
-      town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey,
-      time: item.time,
-      title: item.title, venue, ...located,
-      description: describe(item.description, item.title, venue, town),
-      cost: /\bfree\b/i.test(`${item.title} ${item.description}`) ? "Free" : "See listing",
-      source, url: item.url, mapUrl: mapUrl(item.venue, town),
-      tags,
-      accent: ["purple", "sky", "coral", "mint", "sun"][index % 5],
-      image: item.image,
-      today: dateKey === todayKey,
-      kind, setting: inferSetting(item.title, item.description, venue, tags, kind),
-      // A weekly bar night sits below the municipal and marquee listings — a
-      // nice-to-know, not the reason to open the app. A ranger-led hike or a
-      // kids-and-families program is the opposite: it is exactly what this app
-      // is for, and the county schedules only a handful a week.
-      priority: parser === "stepout" ? 5 : parser === "erieparks" ? 8 : 7,
-    }];
+    return dateKeysInRange(item.start, item.end, todayKey, endKey).map((dateKey) => ({
+      interest,
+      event: {
+        id: `scrape-${slugOf(item.url) || index}-${dateKey}`,
+        area: town.toLowerCase() === "buffalo" ? "city" : defaultArea,
+        town, day: dayLabel(dateKey, todayKey), date: formatDate(dateKey), dateKey,
+        time: item.time,
+        title: item.title, venue, ...located,
+        description: describe(item.description, item.title, venue, town),
+        cost: /\bfree\b/i.test(`${item.title} ${item.description}`) ? "Free" : "See listing",
+        source, url: item.url, mapUrl: mapUrl(item.venue, town),
+        tags,
+        accent: ["purple", "sky", "coral", "mint", "sun"][index % 5],
+        image: item.image,
+        today: dateKey === todayKey,
+        kind, setting: inferSetting(item.title, item.description, venue, tags, kind),
+        // Strong Step Out listings can rank alongside the other live feeds;
+        // routine recurring listings remain useful but sit lower in the day.
+        priority: parser === "stepout" ? Math.max(4, Math.min(8, interest)) : parser === "erieparks" ? 8 : 7,
+      },
+    }));
   });
 
-  // One venue can run trivia, bingo and a tasting on the same night. Cap the
-  // scraped sources per day so they cannot crowd out the rest of a day's list.
+  // Rank before limiting so source order cannot let filler crowd out a better
+  // listing later in the page. Venue diversity prevents a fair's dozens of
+  // micro-events from consuming the whole day.
+  scoredEvents.sort((a, b) => b.interest - a.interest || b.event.priority - a.event.priority || a.event.time.localeCompare(b.event.time));
+  const dailyLimit = parser === "stepout" ? 45 : 12;
   const perDay = new Map<string, number>();
-  return events.filter((event) => {
+  const perVenueDay = new Map<string, number>();
+  return scoredEvents.filter(({ event }) => {
     const count = perDay.get(event.dateKey) ?? 0;
-    if (count >= 4) return false;
+    if (count >= dailyLimit) return false;
+    const venueKey = `${event.dateKey}|${event.venue.toLowerCase()}`;
+    const venueCount = perVenueDay.get(venueKey) ?? 0;
+    if (parser === "stepout" && venueCount >= 4) return false;
     perDay.set(event.dateKey, count + 1);
+    perVenueDay.set(venueKey, venueCount + 1);
     return true;
-  });
+  }).map(({ event }) => event);
 }
 
 type RecurringTemplate = {
@@ -1351,6 +1366,16 @@ function dedupe(events: LiveEvent[]) {
   });
 }
 
+/** Inclusive occurrence keys, clipped to the API's visible date window. */
+function dateKeysInRange(startKey: string, endKey: string, windowStart: string, windowEnd: string) {
+  const first = startKey < windowStart ? windowStart : startKey;
+  const last = endKey > windowEnd ? windowEnd : endKey;
+  if (first > last) return [];
+  const keys: string[] = [];
+  for (let key = first; key <= last; key = addDays(key, 1)) keys.push(key);
+  return keys;
+}
+
 /** Cold refresh fans out to every feed plus image lookups; the default 10s is tight. */
 export const maxDuration = 30;
 
@@ -1363,7 +1388,7 @@ const FRESH_CACHE_CONTROL = "public, max-age=60, s-maxage=300, stale-while-reval
 const DEGRADED_CACHE_CONTROL = "private, no-store";
 
 function cacheKeyFor(todayKey: string) {
-  return `events:balanced-v4:${todayKey}`;
+  return `events:balanced-v5:${todayKey}`;
 }
 
 /**
@@ -1374,7 +1399,7 @@ function cacheKeyFor(todayKey: string) {
  * — a hardcoded copy from months ago. Yesterday's real listings are wrong
  * about which day it is; the snapshot is wrong about everything.
  */
-const LAST_GOOD_KEY = "events:balanced-v4:last-good";
+const LAST_GOOD_KEY = "events:balanced-v5:last-good";
 const REFRESH_LOCK_SECONDS = maxDuration + 5;
 
 function validPayload(value: unknown): EventsPayload | null {
@@ -1458,6 +1483,46 @@ function ticketmasterRequest(todayKey: string, endKey: string, headers: HeadersI
   ];
 }
 
+/**
+ * The Events Calendar caps a response page at 50 records. Buffalo Rising often
+ * exceeds that across an eight-day window, so fetch the advertised remaining
+ * pages instead of silently treating the first page as the complete calendar.
+ */
+async function fetchTribePages(origin: string, todayKey: string, endKey: string, headers: HeadersInit) {
+  const url = new URL(`${origin}/wp-json/tribe/events/v1/events`);
+  url.searchParams.set("start_date", todayKey);
+  url.searchParams.set("end_date", endKey);
+  url.searchParams.set("per_page", "50");
+
+  const firstText = await fetchWithTimeout(url.toString(), headers, FEED_TIMEOUT_MS);
+  let first: { events?: TribeEvent[]; total_pages?: number };
+  try {
+    first = JSON.parse(firstText);
+  } catch {
+    return firstText;
+  }
+
+  const totalPages = Math.min(Math.max(first.total_pages ?? 1, 1), 5);
+  if (totalPages === 1) return firstText;
+  const remaining = await Promise.all(
+    Array.from({ length: totalPages - 1 }, async (_, index) => {
+      const pageUrl = new URL(url);
+      pageUrl.searchParams.set("page", String(index + 2));
+      return fetchWithTimeout(pageUrl.toString(), headers, FEED_TIMEOUT_MS);
+    }),
+  );
+  const events = [...(first.events ?? [])];
+  for (const text of remaining) {
+    try {
+      const page = JSON.parse(text) as { events?: TribeEvent[] };
+      if (Array.isArray(page.events)) events.push(...page.events);
+    } catch {
+      // Keep the successful pages; source health will report their event count.
+    }
+  }
+  return JSON.stringify({ ...first, events });
+}
+
 async function buildEventsPayload(): Promise<EventsPayload> {
   const todayKey = localDateKey();
   const endKey = addDays(todayKey, 7);
@@ -1473,11 +1538,7 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     }),
     ...TRIBE_FEEDS.map(async ([name, origin, area, town]) => {
       const started = Date.now();
-      const text = await fetchWithTimeout(
-        `${origin}/wp-json/tribe/events/v1/events?start_date=${todayKey}&end_date=${endKey}&per_page=50`,
-        headers,
-        FEED_TIMEOUT_MS,
-      );
+      const text = await fetchTribePages(origin, todayKey, endKey, headers);
       return { name, kind: "tribe" as const, area: area as "southtowns" | "city", town, regional: name === "Buffalo Rising", text, durationMs: Date.now() - started };
     }),
     ...ICS_FEEDS.map(async ([name, url, area]) => {
