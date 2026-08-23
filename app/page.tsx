@@ -352,6 +352,9 @@ function SkeletonCard() {
 
 /* -------------------------------------------------------------- home page */
 
+/** What the API said about its own currency: fresh, stale, or a rescued copy. */
+type Freshness = { state: "fresh" | "stale" | "last-good"; ageSeconds: number; builtFor: string } | null;
+
 /** One day of the forecast, keyed by ISO date so events can look themselves up. */
 type DayForecast = { dateKey: string; label: string; high: number; low: number; rain: number; code: number };
 type Weather = { label: string; now: number; high: number; rain: number; days: DayForecast[] } | null;
@@ -379,11 +382,15 @@ function weatherEmoji(code: number) {
 const FETCHED_SOURCES: Array<[string, string]> = [
   ["Buffalo & Erie County Public Library", "https://www.buffalolib.org/"],
   ["EverythingOP", "https://everythingop.com/events/"],
+  ["Orchard Park Chamber", "https://orchardparkchamber.org/events/"],
   ["Buffalo Rising", "https://www.buffalorising.com/events/"],
   ["Town of Orchard Park", "https://www.orchardparkny.gov/events/"],
   ["Town of Evans", "https://townofevansny.gov/events/"],
   ["Southtowns Regional Chamber", "https://southtownsregionalchamber.org/news-events/"],
   ["Explore & More", "https://exploreandmore.org/events/"],
+  ["Erie County Parks", "https://www3.erie.gov/parks/events"],
+  ["Step Out Buffalo", "https://stepoutbuffalo.com/all-events/"],
+  ["East Aurora Chamber", "https://business.eanycc.com/eventcalendar"],
 ];
 
 /**
@@ -392,12 +399,9 @@ const FETCHED_SOURCES: Array<[string, string]> = [
  * than implying the app scrapes them.
  */
 const MANUAL_SOURCES: Array<[string, string]> = [
-  ["Step Out Buffalo", "https://stepoutbuffalo.com/all-events/"],
   ["Visit Buffalo Niagara", "https://visitbuffalo.com/events/"],
-  ["Erie County Parks", "https://www3.erie.gov/parks/calendar"],
   ["Village of Hamburg", "https://villageofhamburgny.gov/events"],
   ["Village of East Aurora", "https://www.eastaurora.gov/news-updates-events/calendar-of-events"],
-  ["East Aurora Chamber", "https://business.eanycc.com/eventcalendar"],
   ["WNY Family Magazine", "https://www.wnyfamilymagazine.com/search/event/calendar-of-events/index.html"],
   ["Orchard Park Bee", "https://www.orchardparkbee.com/"],
   ["Hamburg Sun", "https://www.sun-news.com/"],
@@ -412,6 +416,8 @@ export default function Home() {
     ok: 0,
     total: 0,
   });
+  /** How current the API said its payload was — see `freshness` in the route. */
+  const [freshness, setFreshness] = useState<Freshness>(null);
 
   const [kind, setKind] = useState<EventKind>("All activities");
   const [setting, setSetting] = useState<SettingFilter>("all");
@@ -470,6 +476,7 @@ export default function Home() {
             ok: sources.filter((source) => source.ok).length,
             total: sources.length,
           });
+          setFreshness(data.freshness ?? null);
         }
       } catch {
         // Leave feed.state as "snapshot"; the banner explains what is on screen.
@@ -558,6 +565,9 @@ export default function Home() {
     return [...seen.values()].sort((a, b) => a.dateKey.localeCompare(b.dateKey)).slice(0, 8);
   }, [events]);
 
+  /** Forecast keyed by date, so each day tile can carry its own sky. */
+  const dayWeather = useMemo(() => new Map((weather?.days ?? []).map((day) => [day.dateKey, day])), [weather]);
+
   const todayKey = useMemo(() => events.find((event) => event.today)?.dateKey ?? days[0]?.dateKey ?? "", [events, days]);
   const activeDay = selectedDay ?? todayKey;
 
@@ -602,7 +612,20 @@ export default function Home() {
   const todayCount = todayEvents.length;
   const freeToday = todayEvents.filter((event) => isFree(event.cost)).length;
   const closeToday = todayEvents.filter((event) => event.distance <= 5).length;
-  const rainLikely = weather !== null && weather.rain >= 40;
+
+  /**
+   * The forecast for the day on screen.
+   *
+   * The advisory used to key off today's rain no matter which day you were
+   * browsing, so a wet Wednesday told you to plan indoors for a sunny
+   * Saturday. Everything weather-facing below reads this instead.
+   */
+  const dayForecast = useMemo(
+    () => weather?.days.find((day) => day.dateKey === activeDay) ?? null,
+    [weather, activeDay],
+  );
+  const viewingToday = activeDay === todayKey;
+  const rainLikely = dayForecast !== null && dayForecast.rain >= 40;
 
   /* ---- actions ---- */
 
@@ -801,13 +824,15 @@ export default function Home() {
                       <span>{weather.label}</span>
                     </div>
                     <div className="wcard-rows">
+                      {/* The temperature above is live; these two follow whichever
+                          day the picker is on, so they match the list below. */}
                       <div className="wcard-row">
-                        <span>Today&rsquo;s high</span>
-                        <b>{weather.high}°</b>
+                        <span>{viewingToday ? "Today’s high" : `High ${activeDayMeta?.day === "TOMORROW" ? "tomorrow" : (activeDayMeta?.date ?? "")}`}</span>
+                        <b>{dayForecast ? `${dayForecast.high}°` : "—"}</b>
                       </div>
                       <div className="wcard-row">
                         <span>Chance of rain</span>
-                        <b>{weather.rain}%</b>
+                        <b className={rainLikely ? "warn-text" : undefined}>{dayForecast ? `${dayForecast.rain}%` : "—"}</b>
                       </div>
                       <div className="wcard-row">
                         <span>Calendars checked</span>
@@ -819,7 +844,9 @@ export default function Home() {
                         <span>Events updated</span>
                         <b>
                           {updatedAt
-                            ? new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+                            ? `${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${
+                                freshness?.state === "stale" ? " · refreshing" : ""
+                              }`
                             : loading
                               ? "Loading…"
                               : "Snapshot"}
@@ -866,6 +893,22 @@ export default function Home() {
             </div>
           )}
 
+          {freshness?.state === "last-good" && (
+            <div className="wrap">
+              <div className="advisory warn" role="status">
+                <p>
+                  ⚠️ <strong>Every calendar failed to answer this morning.</strong> These are the last listings that came
+                  through, collected{" "}
+                  {new Date(`${freshness.builtFor}T12:00:00`).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
+                  , so check times before you go.
+                </p>
+                <button type="button" onClick={() => window.location.reload()}>
+                  Try again
+                </button>
+              </div>
+            </div>
+          )}
+
           {feed.state === "live" && feed.ok < feed.total && (
             <div className="wrap">
               <div className="advisory warn" role="status">
@@ -883,7 +926,12 @@ export default function Home() {
             <div className="wrap">
               <div className="advisory">
                 <p>
-                  🌧️ <strong>{weather!.rain}% chance of rain today.</strong> Good day for libraries, museums, play cafés and indoor games.
+                  🌧️{" "}
+                  <strong>
+                    {dayForecast!.rain}% chance of rain{" "}
+                    {viewingToday ? "today" : `on ${activeDayMeta?.date ?? "that day"}`}.
+                  </strong>{" "}
+                  Good {viewingToday ? "day" : "one"} for libraries, museums, play cafés and indoor games.
                 </p>
                 <button
                   type="button"
@@ -911,6 +959,16 @@ export default function Home() {
               >
                 <b>{day.day === "TODAY" || day.day === "TOMORROW" ? day.day : day.day.slice(0, 3)}</b>
                 <span>{day.date.replace(/^[A-Za-z]+,\s*/, "")}</span>
+                {/* Picking a day is a weather decision as much as a calendar one. */}
+                {dayWeather.get(day.dateKey) && (
+                  <span className="daypicker-sky">
+                    <i aria-hidden="true">{weatherEmoji(dayWeather.get(day.dateKey)!.code)}</i>{" "}
+                    {dayWeather.get(day.dateKey)!.high}°
+                    <span className="sr-only">
+                      , {dayWeather.get(day.dateKey)!.label}, {dayWeather.get(day.dateKey)!.rain}% chance of rain
+                    </span>
+                  </span>
+                )}
                 <em>{dayCounts.get(day.dateKey) ?? 0}</em>
               </button>
             ))}

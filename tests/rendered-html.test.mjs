@@ -62,7 +62,7 @@ test("server-renders the dynamic events finder with a last-known snapshot", asyn
   assert.doesNotMatch(html, /Au-Some Morning Edition/);
   assert.match(html, /Pick a day this week/);
   assert.match(html, /Town of Orchard Park/);
-  assert.match(html, /Town of Hamburg/);
+  assert.match(html, /Village of Hamburg/);
   assert.match(html, /Orchard Park Bee/);
   assert.match(html, /Hamburg Sun/);
 
@@ -112,7 +112,7 @@ test("keeps live refresh, interactions and source adapters intact", async () => 
   assert.match(page, /twenty-five-mile-post-clippings/);
   assert.match(page, /api\.open-meteo\.com/);
   assert.match(page, /navigator\.share/);
-  assert.match(page, /fetch\("\/api\/events\?edition=balanced-v2"/);
+  assert.match(page, /fetch\("\/api\/events\?edition=balanced-v3"/);
   assert.doesNotMatch(page, /setInterval/);
   assert.match(page, /refreshed each morning/);
   assert.match(page, /Museums & culture/);
@@ -127,15 +127,50 @@ test("keeps live refresh, interactions and source adapters intact", async () => 
   assert.match(page, /twenty-five-mile-post-theme/);
   assert.match(api, /buffalolib\.libcal\.com\/rss\.php/);
   assert.match(api, /orchardparkny\.gov\/events/);
-  assert.match(api, /iCalendar\.aspx/);
   assert.match(api, /townofevansny\.gov\/events/);
   assert.match(api, /capLibraries/);
   assert.match(api, /s-maxage=86400/);
   assert.match(api, /West Seneca Farmers Market/);
   assert.match(api, /stale-while-revalidate/);
   assert.match(page, /daypicker/);
+
+  // Weather follows the day the picker is on, not always today.
+  assert.match(page, /const dayForecast = useMemo/);
+  assert.match(page, /activeDay/);
+  assert.doesNotMatch(page, /weather !== null && weather\.rain >= 40/);
+  assert.match(page, /daypicker-sky/);
+
+  // Erie County Parks and the home-town chamber are live sources, not manual.
+  assert.match(api, /www3\.erie\.gov\/parks\/events/);
+  assert.match(api, /orchardparkchamber\.org/);
+  assert.match(api, /parseErieParks/);
+  assert.doesNotMatch(page, /\["Erie County Parks", "https:\/\/www3\.erie\.gov\/parks\/calendar"\]/);
+
+  // Freshness is reported rather than assumed.
+  assert.match(api, /"last-good"/);
+  assert.match(api, /LAST_GOOD_KEY/);
+  assert.match(api, /after\(async \(\) =>/);
+  assert.match(page, /Every calendar failed to answer this morning/);
   assert.match(layout, /The 25-Mile Post \| Family Things To Do Near Orchard Park/);
   assert.match(layout, /images: \[\{ url: imageUrl/);
+});
+
+test("caches through a shared store when one is configured", async () => {
+  const cache = await readFile(new URL("../db/cache.ts", import.meta.url), "utf8");
+
+  // Same two entry points as before, so the API route needed no rewiring.
+  assert.match(cache, /export async function getCachedData/);
+  assert.match(cache, /export async function setCachedData/);
+
+  // Vercel KV and Upstash both work, and neither is required.
+  assert.match(cache, /KV_REST_API_URL/);
+  assert.match(cache, /UPSTASH_REDIS_REST_URL/);
+  assert.match(cache, /memoryBackend/);
+
+  // Entries know their own freshness, which is what makes serving a stale
+  // payload while rebuilding possible.
+  assert.match(cache, /freshUntil/);
+  assert.match(cache, /export async function getCachedEntry/);
 });
 
 test("schedules a Vercel Cron warm-up of the events cache", async () => {

@@ -593,6 +593,15 @@ button { cursor: pointer; }
 .daypicker-btn:hover { border-color: var(--line-strong); transform: translateY(-1px); }
 .daypicker-btn b { font: 800 12.5px/1.3 var(--sans); letter-spacing: 0.02em; }
 .daypicker-btn span { font: 700 11px/1.3 var(--sans); color: var(--text-3); }
+.daypicker-btn .daypicker-sky {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 1px;
+  font: 700 10.5px/1.3 var(--sans);
+  color: var(--text-3);
+}
+.daypicker-btn .daypicker-sky i { font-style: normal; font-size: 11px; }
 .daypicker-btn em {
   margin-top: 3px;
   font: 800 11px/1 var(--sans);
@@ -605,6 +614,7 @@ button { cursor: pointer; }
   color: var(--bg);
 }
 .daypicker-btn[aria-pressed="true"] span,
+.daypicker-btn[aria-pressed="true"] .daypicker-sky,
 .daypicker-btn[aria-pressed="true"] em { color: var(--bg); opacity: 0.8; }
 
 /* ============================================================

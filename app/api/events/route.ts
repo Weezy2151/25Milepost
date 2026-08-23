@@ -1,7 +1,9 @@
-import { getCachedData, setCachedData } from "../../../db/cache";
+import { after } from "next/server";
+
+import { cacheBackendName, getCachedEntry, setCachedData } from "../../../db/cache";
 import { distanceFromOrigin, extractTown, ORIGIN, type Precision } from "../../../lib/geo";
 import { describe, resolveImages } from "../../../lib/enrich";
-import { parseGrowthZone, parseStepOutBuffalo, type ScrapedEvent } from "../../../lib/scrape";
+import { parseErieParks, parseGrowthZone, parseStepOutBuffalo, type ScrapedEvent } from "../../../lib/scrape";
 
 type EventKind = "Fairs & festivals" | "Markets & food" | "Live music" | "Sports & active" | "Outdoors" | "Museums & culture" | "Community" | "Library";
 export type EventSetting = "indoor" | "outdoor" | "both";
@@ -59,6 +61,7 @@ const LIBRARY_FEEDS = [
  */
 const TRIBE_FEEDS = [
   ["EverythingOP", "https://everythingop.com", "southtowns", "Orchard Park"],
+  ["Orchard Park Chamber", "https://orchardparkchamber.org", "southtowns", "Orchard Park"],
   ["Buffalo Rising", "https://www.buffalorising.com", "city", "Buffalo"],
 ] as const;
 
@@ -88,10 +91,13 @@ const ICS_FEEDS = [
  * `kind` picks the parser; `town` is the fallback patch for a source whose
  * cards carry no address of their own.
  */
-const SCRAPED_FEEDS = [
+type ScrapeParser = "stepout" | "growthzone" | "erieparks";
+
+const SCRAPED_FEEDS: ReadonlyArray<readonly [string, string, ScrapeParser, "southtowns" | "city", string]> = [
   ["Step Out Buffalo", "https://stepoutbuffalo.com/music-nightlife/", "stepout", "southtowns", ""],
   ["Step Out Buffalo · Food & Drink", "https://stepoutbuffalo.com/food-drink-events/", "stepout", "southtowns", ""],
   ["East Aurora Chamber", "https://business.eanycc.com/eventcalendar", "growthzone", "southtowns", "East Aurora"],
+  ["Erie County Parks", "https://www3.erie.gov/parks/events", "erieparks", "southtowns", ""],
 ] as const;
 
 const branchInfo: Record<string, { town: string; distance: number; area: "southtowns" | "city" }> = {
@@ -598,7 +604,7 @@ function slugOf(url: string) {
 function parseScraped(
   items: ScrapedEvent[],
   source: string,
-  parser: "stepout" | "growthzone",
+  parser: ScrapeParser,
   defaultArea: "southtowns" | "city",
   defaultTown: string,
   todayKey: string,
@@ -642,9 +648,11 @@ function parseScraped(
       image: item.image,
       today: dateKey === todayKey,
       kind, setting: inferSetting(item.title, item.description, venue, tags, kind),
-      // Below the municipal and marquee listings: a weekly bar night is a
-      // nice-to-know, not the reason to open the app.
-      priority: nightlife ? 5 : 7,
+      // A weekly bar night sits below the municipal and marquee listings — a
+      // nice-to-know, not the reason to open the app. A ranger-led hike or a
+      // kids-and-families program is the opposite: it is exactly what this app
+      // is for, and the county schedules only a handful a week.
+      priority: parser === "stepout" ? 5 : parser === "erieparks" ? 8 : 7,
     }];
   });
 
@@ -1405,15 +1413,48 @@ export type EventsPayload = {
   window: { from: string; to: string };
   sources: Array<{ name: string; ok: boolean; count?: number; error?: string }>;
   mix: Record<string, number>;
+  /**
+   * How current this payload actually is, so the page can say so rather than
+   * presenting a rebuilt-from-yesterday list as this morning's.
+   *
+   *   fresh      — built inside the last hour.
+   *   stale      — past the hour, served instantly while a rebuild runs behind
+   *                the response. Still today's listings.
+   *   last-good  — every feed failed, so this is the newest payload that ever
+   *                built. `builtFor` says which morning it was built for.
+   */
+  freshness: { state: "fresh" | "stale" | "last-good"; ageSeconds: number; builtFor: string; store: string };
 };
 
 const CACHE_TTL_SECONDS = 3600;
+/** How long a payload stays servable as stale past its hour of freshness. */
+const CACHE_GRACE_SECONDS = 6 * 3600;
+/** The safety net keeps a week, so a multi-day outage still has real listings. */
+const LAST_GOOD_TTL_SECONDS = 7 * 24 * 3600;
 const CACHE_HEADERS = {
   "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
 };
 
 function cacheKeyFor(todayKey: string) {
   return `events:balanced-v4:${todayKey}`;
+}
+
+/**
+ * Date-independent key for the newest payload that ever built successfully.
+ *
+ * The per-day key expires with its day, so the first reader on a morning when
+ * every feed is down used to fall all the way through to the bundled snapshot
+ * — a hardcoded copy from months ago. Yesterday's real listings are wrong
+ * about which day it is; the snapshot is wrong about everything.
+ */
+const LAST_GOOD_KEY = "events:balanced-v4:last-good";
+
+function withFreshness(
+  payload: EventsPayload,
+  state: EventsPayload["freshness"]["state"],
+  ageSeconds: number,
+): EventsPayload {
+  return { ...payload, freshness: { ...payload.freshness, state, ageSeconds, store: cacheBackendName() } };
 }
 
 /**
@@ -1487,8 +1528,8 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     ...SCRAPED_FEEDS.map(async ([name, url, parser, area, town]) => ({
       name,
       kind: "scrape" as const,
-      parser: parser as "stepout" | "growthzone",
-      area: area as "southtowns" | "city",
+      parser,
+      area,
       town,
       // These are whole rendered pages rather than feeds — Step Out Buffalo's
       // food listing is 2 MB uncompressed — so ask for the gzipped copy.
@@ -1529,7 +1570,9 @@ async function buildEventsPayload(): Promise<EventsPayload> {
       const scraped =
         result.value.parser === "stepout"
           ? parseStepOutBuffalo(result.value.text, todayKey)
-          : parseGrowthZone(result.value.text);
+          : result.value.parser === "erieparks"
+            ? parseErieParks(result.value.text)
+            : parseGrowthZone(result.value.text);
       events.push(
         ...parseScraped(scraped, name, result.value.parser, result.value.area, result.value.town, todayKey, endKey),
       );
@@ -1574,31 +1617,72 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     window: { from: todayKey, to: endKey },
     sources,
     mix,
+    freshness: { state: "fresh", ageSeconds: 0, builtFor: todayKey, store: cacheBackendName() },
   };
 
-  // 5. Save to D1 / Memory cache with 1-hour TTL
-  try {
-    await setCachedData(cacheKeyFor(todayKey), payload, CACHE_TTL_SECONDS);
-  } catch {
-    // Cache write error ignored
+  // 5. A build that produced nothing means every source failed at once — a
+  //    network partition or a bad deploy, not a genuinely empty week. Serve
+  //    the last payload that worked instead of an empty page, and do not
+  //    overwrite the safety net with the failure.
+  if (withImages.length === 0) {
+    const rescued = await lastGoodPayload();
+    if (rescued) return rescued;
+    return payload;
   }
+
+  // 6. Write both the per-day entry and the date-independent safety net.
+  await Promise.allSettled([
+    setCachedData(cacheKeyFor(todayKey), payload, CACHE_TTL_SECONDS, CACHE_GRACE_SECONDS),
+    setCachedData(LAST_GOOD_KEY, payload, LAST_GOOD_TTL_SECONDS, 0),
+  ]);
 
   return payload;
 }
 
+/** The newest payload that ever built, labelled with how old it actually is. */
+async function lastGoodPayload(): Promise<EventsPayload | null> {
+  const entry = await getCachedEntry<EventsPayload>(LAST_GOOD_KEY);
+  if (!entry?.data?.events?.length) return null;
+  console.warn(`[events] serving last-good payload from ${entry.data.window?.from} (${entry.ageSeconds}s old)`);
+  return withFreshness(entry.data, "last-good", entry.ageSeconds);
+}
+
 export async function GET() {
   const todayKey = localDateKey();
+  const cached = await getCachedEntry<EventsPayload>(cacheKeyFor(todayKey));
 
-  // 1. Serve from D1 / Memory cache when it is warm
-  try {
-    const cached = await getCachedData<EventsPayload>(cacheKeyFor(todayKey));
-    if (cached && Array.isArray(cached.events) && cached.events.length > 0) {
-      return Response.json(cached, { headers: { ...CACHE_HEADERS, "X-Cache": "HIT" } });
+  if (cached?.data?.events?.length) {
+    // 1. Warm and inside the hour: serve it as-is.
+    if (!cached.stale) {
+      return Response.json(withFreshness(cached.data, "fresh", cached.ageSeconds), {
+        headers: { ...CACHE_HEADERS, "X-Cache": "HIT" },
+      });
     }
-  } catch {
-    // Cache lookup failed, continue with live fetch
+
+    // 2. Past the hour but inside the grace period: answer immediately from
+    //    the stale copy and rebuild after the response is sent. Nobody waits
+    //    on a dozen live feeds just because they were the first one back.
+    after(async () => {
+      try {
+        await buildEventsPayload();
+      } catch (error) {
+        console.error("[events] background revalidate failed", error);
+      }
+    });
+    return Response.json(withFreshness(cached.data, "stale", cached.ageSeconds), {
+      headers: { ...CACHE_HEADERS, "X-Cache": "STALE" },
+    });
   }
 
-  const payload = await buildEventsPayload();
-  return Response.json(payload, { headers: { ...CACHE_HEADERS, "X-Cache": "MISS" } });
+  // 3. Nothing cached: build it, and fall back to the last good payload if the
+  //    build itself throws rather than merely coming back thin.
+  try {
+    const payload = await buildEventsPayload();
+    return Response.json(payload, { headers: { ...CACHE_HEADERS, "X-Cache": "MISS" } });
+  } catch (error) {
+    console.error("[events] build failed", error);
+    const rescued = await lastGoodPayload();
+    if (rescued) return Response.json(rescued, { headers: { ...CACHE_HEADERS, "X-Cache": "LAST-GOOD" } });
+    throw error;
+  }
 }

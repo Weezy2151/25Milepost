@@ -23,15 +23,17 @@ Then open `http://localhost:3000`.
   fallback snapshot (`app/events-data.ts`, dated `SNAPSHOT_DATE`) so the page
   never shows a blank state, then refreshes itself from `/api/events` once
   mounted.
-- `app/api/events/route.ts` fetches eleven live sources — library RSS, two
-  Events Calendar REST APIs, four iCalendar feeds and three scraped HTML
+- `app/api/events/route.ts` fetches thirteen live sources — library RSS, three
+  Events Calendar REST APIs, four iCalendar feeds and four scraped HTML
   listings — merges in known
   recurring/seasonal events where no live feed already covers them, geocodes
   venues (`lib/geo.ts`), cleans descriptions and resolves preview images
   (`lib/enrich.ts`), and returns the combined, deduped, sorted list.
-- `db/cache.ts` caches that combined payload in memory for an hour so repeat
-  visitors don't each pay for a full round of live feed fetches. This is a per-instance
-  cache — see "Caching on Vercel" below.
+- `db/cache.ts` caches that combined payload for an hour — in a shared Redis
+  store if one is configured, in memory otherwise. Entries stay servable for
+  six hours past that hour, so an expired payload is returned immediately while
+  a rebuild runs behind the response, and a copy of the last payload that ever
+  built successfully is kept for a week as a floor. See "Caching on Vercel".
 - `vercel.json` declares two Vercel Cron Jobs that hit `/api/events` each
   morning to warm the cache ahead of the first visitor, mirroring the
   scheduled warm-up this project originally ran as a Cloudflare Worker cron
@@ -46,6 +48,7 @@ Fetched live on each refresh (see the feed tables at the top of
 | --- | --- | --- |
 | Buffalo & Erie County Public Library (2 feeds) | LibCal RSS | Branch programs across Erie County |
 | EverythingOP | Events Calendar REST | Orchard Park village and town |
+| Orchard Park Chamber | Events Calendar REST | Home-town festivals, Oktoberfest, the arts expo |
 | Buffalo Rising | Events Calendar REST | Regional festivals, concerts, tours |
 | Town of Orchard Park | iCalendar | Town meetings and rec events |
 | Town of Evans | iCalendar | Evans / Angola / Derby |
@@ -53,6 +56,7 @@ Fetched live on each refresh (see the feed tables at the top of
 | Explore & More | iCalendar | Children's museum programming |
 | Step Out Buffalo (2 pages) | Scraped HTML | Trivia, bar bingo, brewery tastings, open mics |
 | East Aurora Chamber | Scraped HTML (schema.org) | East Aurora village events |
+| Erie County Parks | Scraped HTML (Drupal view) | Ranger-led hikes, kids-and-families and nature programs |
 
 Two hand-maintained layers sit alongside them: `RECURRING_TEMPLATES` (weekly
 seasonal staples) and `featuredMajorEvents` (a short marquee list). Recurring
@@ -88,8 +92,8 @@ Two things to know before adding one:
 
 ### Scraped sources
 
-Two listings publish nothing machine-readable and cover something no feed does,
-so `lib/scrape.ts` parses their rendered HTML:
+Three listings publish nothing machine-readable and cover something no feed
+does, so `lib/scrape.ts` parses their rendered HTML:
 
 - **Step Out Buffalo** is the region's only reliable listing of weekly trivia,
   bar bingo and brewery tastings. Its WordPress install exposes no events
@@ -97,11 +101,20 @@ so `lib/scrape.ts` parses their rendered HTML:
   `/music-nightlife/` and `/food-drink-events/`.
 - **East Aurora Chamber** runs on GrowthZone, which marks each card up with
   schema.org microdata — dates come from `itemprop` meta tags rather than
-  display text, which makes it the sturdier of the two.
+  display text, which makes it the sturdier of the three.
+- **Erie County Parks** carries the county's ranger-led hikes, fishing lessons
+  and kids-and-families programs at Chestnut Ridge, Emery, Sprague Brook and
+  the rest — the one part of the region's family calendar nothing else here
+  covered. It runs on a Drupal view with no iCalendar, RSS or JSON endpoint of
+  any kind, but the markup labels each title and category with a class and
+  stamps both ends of the event in `<time datetime>`, so start times come from
+  an attribute rather than display text. The listing prints a park and never a
+  town, so `ERIE_PARK_TOWNS` in `lib/scrape.ts` supplies it; parks whose town
+  is not certain are left unmapped and their events are dropped.
 
-Both are regional listings, so `parseScraped` drops anything it cannot place in
-a known town, and caps each scraped source at four events a day so a single
-night of bar events cannot crowd out the rest of the list. Step Out Buffalo's
+All three are regional listings, so `parseScraped` drops anything it cannot
+place in a known town, and caps each scraped source at four events a day so a
+single night of bar events cannot crowd out the rest of the list. Step Out Buffalo's
 pages also mix real events with standing restaurant promotion, so a listing has
 to read as an event by its title or the site's own category label to be kept —
 see `NIGHTLIFE_EVENT` and `STANDING_PROMOTION` in the route.
@@ -118,6 +131,29 @@ Campus runs The Events Calendar but has posted nothing since 2025, and
 `eastauroraevents.com` is one venue rather than a calendar — its weekend flea
 market is carried as a recurring template instead.
 
+### Categories still missing
+
+Two family-relevant categories have no machine-readable source and are
+deliberately absent rather than half-filled with guesses, checked 2026-08-23:
+
+- **School district events** (concerts, plays, fundraisers). Orchard Park runs
+  Finalsite, which answers 404 on every documented calendar endpoint and 403 on
+  `site/RSS.aspx`; the rendered calendar page exposes only a feed UUID with no
+  public reader. East Aurora's district site does not resolve at all. The
+  category is also mostly board meetings and conference days, which
+  `NOT_AN_OUTING` would drop anyway.
+- **Church and fire-hall fundraisers** — fish fries, chicken BBQs, lawn fêtes.
+  Genuinely among the most-searched WNY weekend categories and carried almost
+  entirely on Facebook, which publishes no feed. This is what
+  `RECURRING_TEMPLATES` exists for, but only with dates and times confirmed
+  from a real listing: an invented church supper is worse than a missing one.
+
+Also checked and rejected: the Buffalo Zoo, the Aquarium of Niagara and the
+Erie County Fair all 403 both their REST and iCal endpoints; the Botanical
+Gardens has no calendar index; Visit Buffalo Niagara sits behind a bot
+challenge. Explore Buffalo's Events Calendar REST API does answer, but has
+posted nothing — worth revisiting when their tour season opens.
+
 ## Deploying to Vercel
 
 This is a standard Next.js app — import the repo in the Vercel dashboard (or
@@ -126,14 +162,37 @@ configuration. No environment variables are required for the app to run.
 
 ### Caching on Vercel
 
-`db/cache.ts` is an in-memory cache, so it only helps within a single warm
-serverless function instance — it is not shared across instances or durable
-across cold starts. That's fine for smoothing out bursts of traffic, but if
-you want the cache to actually stay warm between the two daily cron hits (see
-`vercel.json`), swap it for a shared store such as Vercel KV or Upstash Redis:
-keep the same `getCachedData` / `setCachedData` function signatures in
-`db/cache.ts` and everything else (the API route, the cron warm-up) keeps
-working unchanged.
+`db/cache.ts` prefers a shared Redis store and falls back to memory. Set either
+pair of environment variables and the morning cron warm-up survives cold starts
+and is shared across function instances, which is what makes it actually reach
+the first reader:
+
+| Provider | Variables |
+| --- | --- |
+| Vercel KV | `KV_REST_API_URL`, `KV_REST_API_TOKEN` |
+| Upstash Redis | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` |
+
+With neither set it uses an in-process `Map`, which only helps inside a single
+warm instance. Nothing else changes: both backends store the same envelope and
+the route is identical either way. `/api/events` reports which one is live in
+`freshness.store`.
+
+Three behaviours sit on top of whichever store is in use:
+
+- **Stale-while-revalidate.** A payload is fresh for an hour and stays servable
+  for six hours after that. Past the hour, the route answers from the stale
+  copy immediately and rebuilds in `after()`, once the response is already on
+  its way — nobody waits on thirteen live feeds because they happened to be the
+  first reader back. Watch the `X-Cache` header: `HIT`, `STALE`, `MISS`, or
+  `LAST-GOOD`.
+- **A last-good copy**, written under a date-independent key with a one-week
+  TTL. A morning where every feed fails falls back to the newest listings that
+  ever built rather than to `app/events-data.ts` — yesterday's real events are
+  wrong about which day it is, the bundled snapshot is wrong about everything.
+- **Freshness in the payload.** `freshness.state` is `fresh`, `stale` or
+  `last-good`, with `ageSeconds` and the `builtFor` date. The page reads it and
+  says so: a `last-good` payload gets a banner naming the morning it was
+  collected, and a `stale` one marks the "Events updated" row as refreshing.
 
 The Vercel Hobby plan limits cron jobs to once a day; the second entry in
 `vercel.json` requires a Pro plan. Trim `vercel.json` to one entry if you're
@@ -145,7 +204,8 @@ on Hobby.
 - `npm run build` — production build
 - `npm start` — run the production build locally
 - `npm test` — build first, then run `npm test` to server-render the page and
-  check its markup (see `tests/rendered-html.test.mjs`)
+  check its markup (see `tests/rendered-html.test.mjs`); the three static tests
+  run without a build, the render test needs one
 - `npm run lint` — ESLint
 
 ## Project history
