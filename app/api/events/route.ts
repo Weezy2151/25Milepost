@@ -3,15 +3,18 @@ import { after } from "next/server";
 import { acquireCacheLock, cacheBackendName, getCachedEntry, setCachedData } from "../../../db/cache";
 import { distanceFromOrigin, extractTown, ORIGIN } from "../../../lib/geo";
 import { describe, resolveImages } from "../../../lib/enrich";
-import { eventsPayloadSchema, type EventKind, type EventsPayload, type EventSetting, type LiveEvent, type SourceHealth } from "../../../lib/events";
+import { eventsPayloadSchema, liveEventSchema, type EventKind, type EventsPayload, type EventSetting, type LiveEvent, type SourceHealth } from "../../../lib/events";
 import { EVENTS_HEALTH_KEY, healthSnapshotSchema, type HealthSnapshot } from "../../../lib/health";
 import { parseIcalOccurrences } from "../../../lib/ical";
-import { fetchPublicText } from "../../../lib/safe-fetch";
+import { assertSafePublicUrl, EVENT_IMAGE_HOSTS, fetchPublicText } from "../../../lib/safe-fetch";
 import { parseErieParks, parseGrowthZone, parseStepOutBuffalo, type ScrapedEvent } from "../../../lib/scrape";
 
 export type { EventSetting, LiveEvent } from "../../../lib/events";
 
 const ZONE = "America/New_York";
+const LOCAL_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
+const DATE_FORMATTER = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" });
+const DAY_FORMATTER = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
 
 /**
  * Feeds answer a browser and stall or 403 an unfamiliar agent.
@@ -100,7 +103,7 @@ const branchInfo: Record<string, { town: string; distance: number; area: "southt
 };
 
 function localDateKey(date = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+  return LOCAL_DATE_FORMATTER.format(date);
 }
 
 function addDays(key: string, days: number) {
@@ -135,13 +138,23 @@ function formatTime(raw: string) {
 }
 
 function formatDate(key: string) {
-  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }).format(new Date(`${key}T12:00:00Z`));
+  return DATE_FORMATTER.format(new Date(`${key}T12:00:00Z`));
 }
 
 function dayLabel(key: string, todayKey: string) {
   if (key === todayKey) return "TODAY";
   if (key === addDays(todayKey, 1)) return "TOMORROW";
-  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(new Date(`${key}T12:00:00Z`)).toUpperCase();
+  return DAY_FORMATTER.format(new Date(`${key}T12:00:00Z`)).toUpperCase();
+}
+
+function safeImage(image?: string) {
+  if (!image) return undefined;
+  if (image.startsWith("/") && !image.startsWith("//")) return image;
+  try {
+    return assertSafePublicUrl(image, [...EVENT_IMAGE_HOSTS]).toString();
+  } catch {
+    return undefined;
+  }
 }
 
 /** Town names come back from the geo lookup as lowercase keys; the UI shows them. */
@@ -1379,13 +1392,27 @@ function dateKeysInRange(startKey: string, endKey: string, windowStart: string, 
 /** Cold refresh fans out to every feed plus image lookups; the default 10s is tight. */
 export const maxDuration = 30;
 
-const CACHE_TTL_SECONDS = 3600;
-/** How long a payload stays servable as stale past its hour of freshness. */
+const CACHE_TTL_SECONDS = 2 * 3600;
+/** How long a payload stays servable as stale past its freshness window. */
 const CACHE_GRACE_SECONDS = 6 * 3600;
 /** The safety net keeps a week, so a multi-day outage still has real listings. */
 const LAST_GOOD_TTL_SECONDS = 7 * 24 * 3600;
-const FRESH_CACHE_CONTROL = "public, max-age=60, s-maxage=300, stale-while-revalidate=60";
-const DEGRADED_CACHE_CONTROL = "private, no-store";
+const MAX_EVENTS = 300;
+const FULL_CACHE_CONTROL = {
+  browser: "public, max-age=60, must-revalidate",
+  cdn: "public, max-age=300, stale-while-revalidate=60",
+  vercel: "public, max-age=900, stale-while-revalidate=60",
+};
+const PARTIAL_CACHE_CONTROL = {
+  browser: "public, max-age=15, must-revalidate",
+  cdn: "public, max-age=120, stale-while-revalidate=60",
+  vercel: "public, max-age=120, stale-while-revalidate=60",
+};
+const DEGRADED_CACHE_CONTROL = {
+  browser: "public, max-age=0, must-revalidate",
+  cdn: "public, max-age=60",
+  vercel: "public, max-age=60",
+};
 
 function cacheKeyFor(todayKey: string) {
   return `events:balanced-v5:${todayKey}`;
@@ -1408,8 +1435,13 @@ function validPayload(value: unknown): EventsPayload | null {
 }
 
 function responseHeaders(payload: EventsPayload, cacheStatus: string) {
+  const controls = payload.freshness.state !== "fresh"
+    ? DEGRADED_CACHE_CONTROL
+    : payload.sources.some((source) => !source.ok) ? PARTIAL_CACHE_CONTROL : FULL_CACHE_CONTROL;
   return {
-    "Cache-Control": payload.freshness.state === "fresh" ? FRESH_CACHE_CONTROL : DEGRADED_CACHE_CONTROL,
+    "Cache-Control": controls.browser,
+    "CDN-Cache-Control": controls.cdn,
+    "Vercel-CDN-Cache-Control": controls.vercel,
     "X-Cache": cacheStatus,
   };
 }
@@ -1447,11 +1479,16 @@ function withFreshness(
   return { ...payload, freshness: { ...payload.freshness, state, ageSeconds, store: cacheBackendName() } };
 }
 
+function cachedFreshness(payload: EventsPayload, stale: boolean): EventsPayload["freshness"]["state"] {
+  if (payload.freshness.state === "last-good") return "last-good";
+  return stale ? "stale" : payload.freshness.state;
+}
+
 /**
  * Fetch every source, normalise, enrich and cache.
  *
  * Exported so the scheduled worker can warm the cache each morning — otherwise
- * the first visitor after the TTL expires pays for nine live feed fetches.
+ * the first visitor after the TTL expires pays for all live feed fetches.
  */
 function hasTicketmasterKey() {
   return Boolean(process.env.TICKETMASTER_API_KEY);
@@ -1504,7 +1541,7 @@ async function fetchTribePages(origin: string, todayKey: string, endKey: string,
 
   const totalPages = Math.min(Math.max(first.total_pages ?? 1, 1), 5);
   if (totalPages === 1) return firstText;
-  const remaining = await Promise.all(
+  const remaining = await Promise.allSettled(
     Array.from({ length: totalPages - 1 }, async (_, index) => {
       const pageUrl = new URL(url);
       pageUrl.searchParams.set("page", String(index + 2));
@@ -1512,9 +1549,13 @@ async function fetchTribePages(origin: string, todayKey: string, endKey: string,
     }),
   );
   const events = [...(first.events ?? [])];
-  for (const text of remaining) {
+  for (const result of remaining) {
+    if (result.status === "rejected") {
+      console.warn("[events] a later calendar page failed; retaining successful pages", result.reason);
+      continue;
+    }
     try {
-      const page = JSON.parse(text) as { events?: TribeEvent[] };
+      const page = JSON.parse(result.value) as { events?: TribeEvent[] };
       if (Array.isArray(page.events)) events.push(...page.events);
     } catch {
       // Keep the successful pages; source health will report their event count.
@@ -1574,38 +1615,43 @@ async function buildEventsPayload(): Promise<EventsPayload> {
       return { name, ok: false, error };
     }
     const before = events.length;
-    if (result.value.kind === "library") {
-      events.push(...parseLibrary(result.value.text, todayKey, endKey));
-    } else if (result.value.kind === "tribe") {
-      events.push(
-        ...parseTribe(result.value.text, name, result.value.area, result.value.town, todayKey, endKey, result.value.regional),
-      );
-    } else if (result.value.kind === "ticketmaster") {
-      events.push(...parseTicketmaster(result.value.text, todayKey, endKey));
-    } else if (result.value.kind === "scrape") {
-      const scraped =
-        result.value.parser === "stepout"
-          ? parseStepOutBuffalo(result.value.text, todayKey)
-          : result.value.parser === "erieparks"
-            ? parseErieParks(result.value.text)
-            : parseGrowthZone(result.value.text);
-      events.push(
-        ...parseScraped(scraped, name, result.value.parser, result.value.area, result.value.town, todayKey, endKey),
-      );
-    } else {
-      events.push(...parseIcs(result.value.text, name, result.value.area, todayKey, endKey));
+    try {
+      if (result.value.kind === "library") {
+        events.push(...parseLibrary(result.value.text, todayKey, endKey));
+      } else if (result.value.kind === "tribe") {
+        events.push(
+          ...parseTribe(result.value.text, name, result.value.area, result.value.town, todayKey, endKey, result.value.regional),
+        );
+      } else if (result.value.kind === "ticketmaster") {
+        events.push(...parseTicketmaster(result.value.text, todayKey, endKey));
+      } else if (result.value.kind === "scrape") {
+        const scraped =
+          result.value.parser === "stepout"
+            ? parseStepOutBuffalo(result.value.text, todayKey)
+            : result.value.parser === "erieparks"
+              ? parseErieParks(result.value.text)
+              : parseGrowthZone(result.value.text);
+        events.push(
+          ...parseScraped(scraped, name, result.value.parser, result.value.area, result.value.town, todayKey, endKey),
+        );
+      } else {
+        events.push(...parseIcs(result.value.text, name, result.value.area, todayKey, endKey));
+      }
+      const count = events.length - before;
+      if (count === 0) console.warn(`[events] source returned no usable events: ${name}`);
+      return {
+        name,
+        ok: count > 0,
+        count,
+        durationMs: result.value.durationMs,
+        ...(count === 0 ? { error: "No usable events in the requested window" } : {}),
+      };
+    } catch (error) {
+      events.splice(before);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[events] source could not be parsed: ${name} — ${message}`);
+      return { name, ok: false, error: message, durationMs: result.value.durationMs };
     }
-    const count = events.length - before;
-    // A feed that answers 200 with nothing usable is broken too — West Seneca
-    // did exactly that for months while reporting as healthy.
-    if (count === 0) console.warn(`[events] source returned no usable events: ${name}`);
-    return {
-      name,
-      ok: count > 0,
-      count,
-      durationMs: result.value.durationMs,
-      ...(count === 0 ? { error: "No usable events in the requested window" } : {}),
-    };
   });
 
   // 3. Merge: live feeds first, then hand-written recurring entries only where
@@ -1614,9 +1660,17 @@ async function buildEventsPayload(): Promise<EventsPayload> {
   const major = featuredMajorEvents(todayKey, endKey);
   const allEvents = [...major, ...recurring, ...events];
 
-  const normalized = capLibraries(dedupe(allEvents)).sort(
+  const validEvents = allEvents.flatMap((event) => {
+    const parsed = liveEventSchema.safeParse({ ...event, image: safeImage(event.image) });
+    if (!parsed.success) {
+      console.warn(`[events] dropped invalid event: ${event.title}`);
+      return [];
+    }
+    return [parsed.data];
+  });
+  const normalized = capLibraries(dedupe(validEvents)).sort(
     (a, b) => a.dateKey.localeCompare(b.dateKey) || b.priority - a.priority || a.distance - b.distance || a.time.localeCompare(b.time)
-  );
+  ).slice(0, MAX_EVENTS);
 
   // 4. Give image-less events a real preview picture where the source page has one
   const needImages = normalized.filter((event) => !event.image);
@@ -1625,12 +1679,10 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     event.image || !images.has(event.url) ? event : { ...event, image: images.get(event.url) },
   );
 
-  const mix = Object.fromEntries(
-    [...new Set(withImages.map((event) => event.kind))].map((kind) => [
-      kind,
-      withImages.filter((event) => event.kind === kind).length,
-    ])
-  );
+  const mix = withImages.reduce<Record<string, number>>((counts, event) => {
+    counts[event.kind] = (counts[event.kind] ?? 0) + 1;
+    return counts;
+  }, {});
 
   const payload: EventsPayload = {
     events: withImages,
@@ -1652,16 +1704,20 @@ async function buildEventsPayload(): Promise<EventsPayload> {
   //    overwrite the safety net with the failure.
   if (!sources.some((source) => source.ok)) {
     const rescued = await lastGoodPayload();
-    if (rescued) return rescued;
-    return validated;
+    const degraded = rescued ? { ...rescued, sources } : withFreshness(validated, "stale", 0);
+    await cacheDegraded(todayKey, degraded);
+    return degraded;
   }
 
-  // 6. Write both the per-day entry and the date-independent safety net.
+  // 6. Cache every usable result for today, but only replace the week-long
+  // safety copy when at least two independent sources produced a useful set.
+  const promoteLastGood = sources.filter((source) => source.ok).length >= 2 && validated.events.length >= 5;
   const writes = await Promise.allSettled([
     setCachedData(cacheKeyFor(todayKey), validated, CACHE_TTL_SECONDS, CACHE_GRACE_SECONDS),
-    setCachedData(LAST_GOOD_KEY, validated, LAST_GOOD_TTL_SECONDS, 0),
+    ...(promoteLastGood ? [setCachedData(LAST_GOOD_KEY, validated, LAST_GOOD_TTL_SECONDS, 0)] : []),
   ]);
   for (const write of writes) if (write.status === "rejected") console.error("[events] cache write failed", write.reason);
+  if (!promoteLastGood) console.warn("[events] partial build retained without replacing last-good cache");
 
   return validated;
 }
@@ -1671,22 +1727,56 @@ async function lastGoodPayload(): Promise<EventsPayload | null> {
   const entry = await getCachedEntry<EventsPayload>(LAST_GOOD_KEY);
   const payload = validPayload(entry?.data);
   if (!entry || !payload?.events.length) return null;
+  const todayKey = localDateKey();
+  const endKey = addDays(todayKey, 7);
+  const events = payload.events
+    .filter((event) => event.dateKey >= todayKey && event.dateKey <= endKey)
+    .map((event) => ({
+      ...event,
+      today: event.dateKey === todayKey || undefined,
+      day: dayLabel(event.dateKey, todayKey),
+      date: formatDate(event.dateKey),
+    }));
+  if (!events.length) return null;
+  const mix = events.reduce<Record<string, number>>((counts, event) => {
+    counts[event.kind] = (counts[event.kind] ?? 0) + 1;
+    return counts;
+  }, {});
   console.warn(`[events] serving last-good payload from ${payload.window.from} (${entry.ageSeconds}s old)`);
-  return withFreshness(payload, "last-good", entry.ageSeconds);
+  return withFreshness({ ...payload, events, count: events.length, mix, window: { from: todayKey, to: endKey } }, "last-good", entry.ageSeconds);
 }
 
-let localRebuild: Promise<void> | null = null;
+async function cacheDegraded(todayKey: string, payload: EventsPayload) {
+  try {
+    await setCachedData(cacheKeyFor(todayKey), payload, 300, 300);
+  } catch (error) {
+    console.error("[events] degraded-cache write failed", error);
+  }
+}
+
+const localRebuilds = new Map<string, Promise<EventsPayload>>();
 
 function revalidateOnce(todayKey: string) {
-  if (localRebuild) return localRebuild;
-  localRebuild = (async () => {
+  const existing = localRebuilds.get(todayKey);
+  if (existing) return existing;
+  const rebuild = (async () => {
     const acquired = await acquireCacheLock(`events:refresh-lock:${todayKey}`, REFRESH_LOCK_SECONDS);
-    if (!acquired) return;
-    await buildEventsPayload();
-  })().finally(() => {
-    localRebuild = null;
-  });
-  return localRebuild;
+    if (acquired) return buildEventsPayload();
+
+    // Another instance owns the rebuild. Give it a short window to publish the
+    // shared result instead of launching a duplicate thirteen-source fan-out.
+    for (const waitMs of [200, 400, 800]) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      const entry = await getCachedEntry<EventsPayload>(cacheKeyFor(todayKey));
+      const payload = validPayload(entry?.data);
+      if (entry && !entry.stale && payload?.events.length) return withFreshness(payload, payload.freshness.state, entry.ageSeconds);
+    }
+    const rescued = await lastGoodPayload();
+    if (rescued) return rescued;
+    return buildEventsPayload();
+  })().finally(() => localRebuilds.delete(todayKey));
+  localRebuilds.set(todayKey, rebuild);
+  return rebuild;
 }
 
 export async function GET() {
@@ -1695,13 +1785,13 @@ export async function GET() {
   const cachedPayload = validPayload(cached?.data);
 
   if (cached && cachedPayload?.events.length) {
-    // 1. Warm and inside the hour: serve it as-is.
+    // 1. Warm and inside the two-hour freshness window: serve it as-is.
     if (!cached.stale) {
-      const payload = withFreshness(cachedPayload, "fresh", cached.ageSeconds);
+      const payload = withFreshness(cachedPayload, cachedFreshness(cachedPayload, false), cached.ageSeconds);
       return Response.json(payload, { headers: responseHeaders(payload, "HIT") });
     }
 
-    // 2. Past the hour but inside the grace period: answer immediately from
+    // 2. Past the fresh window but inside the grace period: answer immediately from
     //    the stale copy and rebuild after the response is sent. Nobody waits
     //    on a dozen live feeds just because they were the first one back.
     after(async () => {
@@ -1711,19 +1801,39 @@ export async function GET() {
         console.error("[events] background revalidate failed", error);
       }
     });
-    const payload = withFreshness(cachedPayload, "stale", cached.ageSeconds);
+    const payload = withFreshness(cachedPayload, cachedFreshness(cachedPayload, true), cached.ageSeconds);
     return Response.json(payload, { headers: responseHeaders(payload, "STALE") });
   }
 
   // 3. Nothing cached: build it, and fall back to the last good payload if the
   //    build itself throws rather than merely coming back thin.
   try {
-    const payload = await buildEventsPayload();
+    const payload = await revalidateOnce(todayKey);
     return Response.json(payload, { headers: responseHeaders(payload, "MISS") });
   } catch (error) {
     console.error("[events] build failed", error);
     const rescued = await lastGoodPayload();
     if (rescued) return Response.json(rescued, { headers: responseHeaders(rescued, "LAST-GOOD") });
     throw error;
+  }
+}
+
+/** Authenticated, uncached refresh used by the dedicated Vercel Cron route. */
+export async function POST(request: Request) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return Response.json({ error: "CRON_SECRET is not configured" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
+    return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
+  }
+  try {
+    const payload = await revalidateOnce(localDateKey());
+    const healthy = payload.freshness.state === "fresh" && payload.sources.some((source) => source.ok);
+    return Response.json({ refreshed: healthy, count: payload.count, freshness: payload.freshness }, {
+      status: healthy ? 200 : 503,
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch (error) {
+    console.error("[events] scheduled refresh failed", error);
+    return Response.json({ error: "Scheduled refresh failed" }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
 }

@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Fraunces, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import { ErrorBoundary } from "./error-boundary";
 
@@ -9,21 +8,17 @@ const description =
 
 const deploymentHost = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.VERCEL_PROJECT_PRODUCTION_URL ?? "http://localhost:3000";
 const metadataBase = new URL(/^https?:\/\//.test(deploymentHost) ? deploymentHost : `https://${deploymentHost}`);
-const sans = Plus_Jakarta_Sans({ subsets: ["latin"], display: "swap", variable: "--font-sans" });
-const serif = Fraunces({ subsets: ["latin"], display: "swap", variable: "--font-serif" });
-
 export const metadata: Metadata = {
   metadataBase,
   title,
   description,
-  icons: { icon: "/og.png", shortcut: "/og.png" },
   openGraph: {
     title,
     description,
     type: "website",
-    images: [{ url: "/og.png", width: 1730, height: 909, alt: "The 25-Mile Post family field guide" }],
+    images: [{ url: "/og.jpg", width: 1200, height: 630, alt: "The 25-Mile Post family field guide" }],
   },
-  twitter: { card: "summary_large_image", title, description, images: ["/og.png"] },
+  twitter: { card: "summary_large_image", title, description, images: ["/og.jpg"] },
 };
 
 // Applies the saved theme before first paint so the page never flashes the wrong palette.
@@ -31,7 +26,7 @@ const themeBoot = `try{var t=localStorage.getItem("twenty-five-mile-post-theme")
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning className={`${sans.variable} ${serif.variable}`}>
+    <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeBoot }} />
       </head>

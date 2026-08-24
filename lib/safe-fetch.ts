@@ -6,6 +6,8 @@ type TextFetchOptions = {
   allowedHosts?: string[];
 };
 
+export { EVENT_IMAGE_HOSTS } from "./image-hosts.ts";
+
 function privateIpv4(hostname: string) {
   const parts = hostname.split(".").map(Number);
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
@@ -62,10 +64,13 @@ export async function readLimitedBytes(response: Response, maxBytes: number) {
 
 export async function fetchPublicText(raw: string, options: TextFetchOptions): Promise<string> {
   let url = assertSafePublicUrl(raw, options.allowedHosts);
+  const deadline = Date.now() + options.timeoutMs;
   for (let redirects = 0; redirects <= 3; redirects += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) throw new DOMException("Request timed out", "TimeoutError");
     const response = await fetch(url, {
       headers: options.headers,
-      signal: AbortSignal.timeout(options.timeoutMs),
+      signal: AbortSignal.timeout(remainingMs),
       redirect: "manual",
       cache: "no-store",
     });
@@ -84,19 +89,6 @@ export async function fetchPublicText(raw: string, options: TextFetchOptions): P
   }
   throw new Error("Request did not complete");
 }
-
-export const EVENT_IMAGE_HOSTS = [
-  "everythingop.com",
-  "orchardparkchamber.org",
-  "buffalorising.com",
-  "stepoutbuffalo.com",
-  "eanycc.com",
-  "growthzoneapp.com",
-  "erie.gov",
-  "ticketm.net",
-  "exploreandmore.org",
-  "buffalolib.org",
-] as const;
 
 export const EVENT_PAGE_HOSTS = [
   "buffalolib.libcal.com", "everythingop.com", "orchardparkchamber.org", "buffalorising.com",

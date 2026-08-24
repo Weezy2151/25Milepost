@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { parseEventsPayload, parseStoredIds, parseStoredPlan, type Freshness, type StoredPlanItem } from "../lib/events";
-import { weatherSchema, type DayForecast, type Weather } from "../lib/weather";
+import { parseEventsPayload, parseStoredIds, parseStoredPlan, parseWeatherPayload, type StoredPlanItem } from "../lib/client-data";
+import type { Freshness } from "../lib/events";
+import type { DayForecast, Weather } from "../lib/weather";
 import {
   fallbackEvents,
   SNAPSHOT_DATE,
@@ -64,13 +65,9 @@ function moodLabel(vibe: Vibe) {
   return MOODS.find((mood) => mood.id === vibe)?.label ?? "All";
 }
 
-function imageSrc(source: string) {
-  return source.startsWith("/") ? source : `/api/image?url=${encodeURIComponent(source)}`;
-}
-
 /* ------------------------------------------------------------- event card */
 
-function EventCard({
+const EventCard = memo(function EventCard({
   event,
   isSaved,
   inPlan,
@@ -95,7 +92,13 @@ function EventCard({
     <article className={`card accent-${event.accent}`} id={event.id}>
       <button type="button" className="card-media" onClick={() => onOpen(event)} aria-label={`Open details for ${event.title}`}>
         {event.image ? (
-          <Image src={imageSrc(event.image)} alt="" fill sizes="(max-width: 760px) 100vw, (max-width: 1080px) 50vw, 33vw" />
+          <Image
+            src={event.image}
+            alt=""
+            fill
+            quality={70}
+            sizes="(max-width: 760px) calc(100vw - 32px), (max-width: 891px) calc((100vw - 72px) / 2), (max-width: 1175px) calc((100vw - 88px) / 3), 294px"
+          />
         ) : (
           <span className="card-pattern">
             <em>{event.tags[0]}</em>
@@ -116,9 +119,11 @@ function EventCard({
           <IconClock />
           {event.date} <span>·</span> {event.time}
         </p>
-        <button type="button" className="card-title" onClick={() => onOpen(event)}>
-          {event.title}
-        </button>
+        <h3>
+          <button type="button" className="card-title" onClick={() => onOpen(event)}>
+            {event.title}
+          </button>
+        </h3>
         <p className="card-where">
           <IconPin />
           <span>
@@ -176,30 +181,9 @@ function EventCard({
       </div>
     </article>
   );
-}
-
-function SkeletonCard() {
-  return (
-    <div className="sk" aria-hidden="true">
-      <div className="sk-media" />
-      <div className="sk-body">
-        <div className="sk-line" style={{ width: "40%" }} />
-        <div className="sk-line" style={{ width: "88%", height: 18 }} />
-        <div className="sk-line" style={{ width: "62%" }} />
-        <div className="sk-line" style={{ width: "100%" }} />
-        <div className="sk-line" style={{ width: "76%" }} />
-      </div>
-    </div>
-  );
-}
+});
 
 /* -------------------------------------------------------------- home page */
-
-/** Short weather note for an event's own date — only worth showing outdoors. */
-function forecastFor(event: EventPick, days: DayForecast[]) {
-  if (!event.dateKey || event.setting === "indoor") return null;
-  return days.find((day) => day.dateKey === event.dateKey) ?? null;
-}
 
 function weatherEmoji(code: number) {
   if (code === 0) return "☀️";
@@ -243,6 +227,14 @@ const MANUAL_SOURCES: Array<[string, string]> = [
   ["Hamburg Sun", "https://www.sun-news.com/"],
 ];
 
+function persist(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* storage full or blocked — state still works for this session */
+  }
+}
+
 export default function Home() {
   const [events, setEvents] = useState<EventPick[]>(fallbackEvents);
   const [loading, setLoading] = useState(true);
@@ -274,9 +266,15 @@ export default function Home() {
   const [greeting, setGreeting] = useState("Hello, Orchard Park.");
   const [theme, setTheme] = useState<"light" | "dark" | null>(null);
   const [weather, setWeather] = useState<Weather | null>(null);
+  const [weatherLoading, setWeatherLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState("");
   const [notice, setNotice] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const savedRef = useRef<string[]>([]);
+  const planItemsRef = useRef<StoredPlanItem[]>([]);
+  const deferredQuery = useDeferredValue(query);
+  const savedSet = useMemo(() => new Set(saved), [saved]);
+  const planIds = useMemo(() => new Set(planItems.map((item) => item.id)), [planItems]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const plan = useMemo(() => planItems.flatMap((item) => eventById.get(item.id) ?? []), [planItems, eventById]);
   const unavailablePlan = useMemo(() => planItems.filter((item) => !eventById.has(item.id)), [planItems, eventById]);
@@ -288,14 +286,20 @@ export default function Home() {
     // Storage is read after mount (not in a state initialiser) so the server and
     // client render the same first pass; the extra render is the point, not a bug.
     /* eslint-disable react-hooks/set-state-in-effect */
+    let resolvedTheme: "light" | "dark" = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     try {
-      setSaved(parseStoredIds(window.localStorage.getItem(SAVED_KEY)));
-      setPlanItems(parseStoredPlan(window.localStorage.getItem(PLAN_KEY)));
+      const storedSaved = parseStoredIds(window.localStorage.getItem(SAVED_KEY));
+      const storedPlan = parseStoredPlan(window.localStorage.getItem(PLAN_KEY));
+      savedRef.current = storedSaved;
+      planItemsRef.current = storedPlan;
+      setSaved(storedSaved);
+      setPlanItems(storedPlan);
       const storedTheme = window.localStorage.getItem(THEME_KEY);
-      if (storedTheme === "dark" || storedTheme === "light") setTheme(storedTheme);
+      if (storedTheme === "dark" || storedTheme === "light") resolvedTheme = storedTheme;
     } catch {
       /* storage unavailable — carry on with defaults */
     }
+    setTheme(resolvedTheme);
 
     const hour = new Date().getHours();
     setGreeting(hour < 12 ? "Good morning, Orchard Park." : hour < 17 ? "Good afternoon, Orchard Park." : "Good evening, Orchard Park.");
@@ -320,7 +324,7 @@ export default function Home() {
       } catch {
         // Leave feed.state as "snapshot"; the banner explains what is on screen.
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     })();
 
@@ -330,17 +334,16 @@ export default function Home() {
         return response.json();
       })
       .then((value) => {
-        const parsed = weatherSchema.safeParse(value);
-        setWeather(parsed.success ? parsed.data : null);
+        setWeather(parseWeatherPayload(value));
       })
-      .catch(() => setWeather(null));
+      .catch(() => { if (!controller.signal.aborted) setWeather(null); })
+      .finally(() => { if (!controller.signal.aborted) setWeatherLoading(false); });
     /* eslint-enable react-hooks/set-state-in-effect */
     return () => controller.abort();
   }, []);
 
   useEffect(() => {
     if (theme) document.documentElement.setAttribute("data-theme", theme);
-    else document.documentElement.removeAttribute("data-theme");
   }, [theme]);
 
   useEffect(() => {
@@ -351,9 +354,13 @@ export default function Home() {
 
   /* ---- filtering ---- */
 
-  const matchesVibe = useCallback((event: EventPick, choice: Vibe) => {
+  const searchableEvents = useMemo(() => events.map((event) => ({
+    event,
+    text: `${event.title} ${event.description} ${event.venue} ${event.town} ${event.tags.join(" ")} ${event.kind || ""}`.toLowerCase(),
+  })), [events]);
+
+  const matchesVibe = useCallback((event: EventPick, choice: Vibe, text: string) => {
     if (choice === "all") return true;
-    const text = `${event.title} ${event.description} ${event.tags.join(" ")} ${event.kind || ""}`.toLowerCase();
     if (choice === "outside") return event.setting === "outdoor" || event.setting === "both" || /park|trail|hike|nature|outdoor|lawn/i.test(text);
     if (choice === "kids") return /kids|family|children|storytime|play|animals|museum/i.test(text) || event.kind === "Library";
     if (choice === "food") return event.kind === "Markets & food" || /market|produce|farm|food|tasting|bakery/i.test(text);
@@ -366,22 +373,20 @@ export default function Home() {
   // Every filter except which day is selected — used both for the results list
   // and to count how many events each day tab would show.
   const baseFiltered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const list = events.filter((event) => {
-      if (kind !== "All activities" && event.kind !== kind && !(!event.kind && event.tags.includes(kind))) return false;
-      if (setting !== "all" && event.setting !== setting && event.setting !== "both" && event.setting) return false;
-      if (maxDistance !== null && event.distance > maxDistance) return false;
-      if (!matchesVibe(event, vibe)) return false;
-      if (showSaved && !saved.includes(event.id)) return false;
-      if (needle) {
-        const text = `${event.title} ${event.description} ${event.venue} ${event.town} ${event.tags.join(" ")}`.toLowerCase();
-        if (!text.includes(needle)) return false;
-      }
-      return true;
-    });
+    const needle = deferredQuery.trim().toLowerCase();
+    const list: EventPick[] = [];
+    for (const { event, text } of searchableEvents) {
+      if (kind !== "All activities" && event.kind !== kind && !(!event.kind && event.tags.includes(kind))) continue;
+      if (setting !== "all" && event.setting !== setting && event.setting !== "both" && event.setting) continue;
+      if (maxDistance !== null && event.distance > maxDistance) continue;
+      if (!matchesVibe(event, vibe, text)) continue;
+      if (showSaved && !savedSet.has(event.id)) continue;
+      if (needle && !text.includes(needle)) continue;
+      list.push(event);
+    }
     if (sort === "closest") return [...list].sort((a, b) => a.distance - b.distance);
     return list;
-  }, [events, kind, setting, maxDistance, vibe, showSaved, saved, query, sort, matchesVibe]);
+  }, [searchableEvents, kind, setting, maxDistance, vibe, showSaved, savedSet, deferredQuery, sort, matchesVibe]);
 
   /** The week's days in order, one tile per distinct date the current event set covers. */
   const days = useMemo(() => {
@@ -448,45 +453,44 @@ export default function Home() {
    * Saturday. Everything weather-facing below reads this instead.
    */
   const dayForecast = useMemo(
-    () => weather?.days.find((day) => day.dateKey === activeDay) ?? null,
-    [weather, activeDay],
+    () => dayWeather.get(activeDay) ?? null,
+    [dayWeather, activeDay],
   );
   const viewingToday = activeDay === todayKey;
   const rainLikely = dayForecast !== null && dayForecast.rain >= 40;
 
   /* ---- actions ---- */
 
-  const persist = (key: string, value: unknown) => {
-    try {
-      window.localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      /* storage full or blocked — state still works for this session */
-    }
-  };
-
-  const toggleSave = (id: string) => {
-    const next = saved.includes(id) ? saved.filter((item) => item !== id) : [...saved, id];
+  const toggleSave = useCallback((id: string) => {
+    const current = savedRef.current;
+    const exists = current.includes(id);
+    const next = exists ? current.filter((item) => item !== id) : [...current, id];
+    savedRef.current = next;
     setSaved(next);
     persist(SAVED_KEY, next);
-    setNotice(saved.includes(id) ? "Removed from saved." : "Saved to this device.");
-  };
+    setNotice(exists ? "Removed from saved." : "Saved to this device.");
+  }, []);
 
-  const togglePlan = (event: EventPick) => {
-    const exists = planItems.some((item) => item.id === event.id);
-    const next = exists ? planItems.filter((item) => item.id !== event.id) : [...planItems, { id: event.id, title: event.title }];
+  const togglePlan = useCallback((event: EventPick) => {
+    const current = planItemsRef.current;
+    const exists = current.some((item) => item.id === event.id);
+    const next = exists ? current.filter((item) => item.id !== event.id) : [...current, { id: event.id, title: event.title }];
+    planItemsRef.current = next;
     setPlanItems(next);
     persist(PLAN_KEY, { version: 2, items: next });
     setNotice(exists ? `Removed “${event.title}” from My Day.` : `Added “${event.title}” to My Day.`);
-  };
+  }, []);
 
   const removePlanItem = (id: string, title: string) => {
     const next = planItems.filter((item) => item.id !== id);
+    planItemsRef.current = next;
     setPlanItems(next);
     persist(PLAN_KEY, { version: 2, items: next });
     setNotice(`Removed “${title}” from My Day.`);
   };
 
   const clearPlan = () => {
+    planItemsRef.current = [];
     setPlanItems([]);
     persist(PLAN_KEY, { version: 2, items: [] });
     setNotice("My Day cleared.");
@@ -527,22 +531,22 @@ export default function Home() {
     searchRef.current?.focus();
   };
 
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    try {
+      window.localStorage.setItem(THEME_KEY, next);
+    } catch {
+      /* storage unavailable — theme still works for this session */
+    }
+  };
+
   const closeDetails = useCallback(() => setSelected(null), []);
   const closePlan = useCallback(() => setPlanOpen(false), []);
   const closeSheet = useCallback(() => setSheetOpen(false), []);
   const detailRef = useModal(selected !== null, closeDetails);
   const planRef = useModal(planOpen, closePlan);
   const sheetRef = useModal(sheetOpen, closeSheet);
-
-  const cardProps = (event: EventPick) => ({
-    event,
-    isSaved: saved.includes(event.id),
-    inPlan: planItems.some((item) => item.id === event.id),
-    forecast: weather ? forecastFor(event, weather.days) : null,
-    onToggleSave: toggleSave,
-    onTogglePlan: togglePlan,
-    onOpen: setSelected,
-  });
 
   /* --------------------------------------------------------------- render */
 
@@ -583,7 +587,7 @@ export default function Home() {
             <button
               type="button"
               className={theme === "dark" ? "icon-btn on" : "icon-btn"}
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              onClick={toggleTheme}
               aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
               title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
             >
@@ -650,9 +654,9 @@ export default function Home() {
             </div>
 
             <div className="aside-stack">
-              <div className="wcard">
+              <div className="wcard" aria-busy={weatherLoading}>
                 <div className="wcard-head">
-                  <span className={loading ? "live-dot busy" : "live-dot"} />
+                  <span className={weatherLoading ? "live-dot busy" : "live-dot"} />
                   Live Orchard Park weather
                 </div>
                 {weather ? (
@@ -692,6 +696,15 @@ export default function Home() {
                       </div>
                     </div>
                   </>
+                ) : weatherLoading ? (
+                  <div className="weather-skeleton" aria-hidden="true">
+                    <span />
+                    <b />
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
                 ) : (
                   <div className="wcard-temp">
                     <span>Forecast unavailable — check before outdoor plans.</span>
@@ -940,7 +953,7 @@ export default function Home() {
         )}
 
         {/* -------------------------------------------------------- results */}
-        <section className="wrap section" id="results" aria-label={`Events on ${activeDayMeta?.date ?? "the selected day"}`}>
+        <section className="wrap section" id="results" tabIndex={-1} aria-label={`Events on ${activeDayMeta?.date ?? "the selected day"}`}>
           <div className="section-head">
             <div>
               <p className="eyebrow">{activeDay === todayKey ? "Today" : "Plan ahead"}</p>
@@ -953,16 +966,19 @@ export default function Home() {
             </p>
           </div>
 
-          {loading && events.length === 0 ? (
-            <div className="grid">
-              {Array.from({ length: 4 }, (_, index) => (
-                <SkeletonCard key={index} />
-              ))}
-            </div>
-          ) : filtered.length ? (
+          {filtered.length ? (
             <div className="grid">
               {filtered.map((event) => (
-                <EventCard key={event.id} {...cardProps(event)} />
+                <EventCard
+                  key={event.id}
+                  event={event}
+                  isSaved={savedSet.has(event.id)}
+                  inPlan={planIds.has(event.id)}
+                  forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
+                  onToggleSave={toggleSave}
+                  onTogglePlan={togglePlan}
+                  onOpen={setSelected}
+                />
               ))}
             </div>
           ) : (
@@ -1049,7 +1065,7 @@ export default function Home() {
             <div className="drawer-scroll">
               {selected.image && (
                 <div className="drawer-hero">
-                  <Image src={imageSrc(selected.image)} alt="" fill sizes="(max-width: 760px) 100vw, 440px" />
+                  <Image src={selected.image} alt="" fill quality={70} sizes="(max-width: 760px) 100vw, 440px" />
                 </div>
               )}
               <div className="drawer-body">

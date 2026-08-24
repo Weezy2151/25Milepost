@@ -6,7 +6,7 @@ Router and deployable on Vercel.
 
 ## Prerequisites
 
-- Node.js `>=22.6.0`
+- Node.js `24.x` (the same major used by CI and Vercel)
 
 ## Quick Start
 
@@ -19,26 +19,27 @@ Then open `http://localhost:3000`.
 
 ## How it works
 
-- `app/page.tsx` is the client-rendered events finder. It boots from a bundled
+- `app/page.tsx` is the interactive events finder. It server-renders a bundled
   fallback snapshot (`app/events-data.ts`, dated `SNAPSHOT_DATE`) so the page
   never shows a blank state, then refreshes itself from `/api/events` once
   mounted.
-- `/api/weather` validates and caches Orchard Park forecasts server-side, and
-  `/api/image` provides a size-limited, host-restricted image path for event
-  cards. Visitors never call feed, weather, or image hosts directly.
+- `/api/weather` validates and caches Orchard Park forecasts server-side. Event
+  photos use Next.js image optimization directly; the optimizer's remote-host
+  allowlist is shared with the server-side URL validator, so untrusted image
+  origins are discarded before they reach the page.
 - `app/api/events/route.ts` fetches thirteen live sources — library RSS, three
   Events Calendar REST APIs, four iCalendar feeds and four scraped HTML
   listings — merges in known
   recurring/seasonal events where no live feed already covers them, geocodes
   venues (`lib/geo.ts`), cleans descriptions and resolves preview images
   (`lib/enrich.ts`), and returns the combined, deduped, sorted list.
-- `db/cache.ts` caches that combined payload for an hour — in a shared Redis
+- `db/cache.ts` caches that combined payload for two hours — in a shared Redis
   store if one is configured, in memory otherwise. Entries stay servable for
-  six hours past that hour, so an expired payload is returned immediately while
+  six hours past that window, so an expired payload is returned immediately while
   one leased rebuild runs behind the response, and a copy of the last payload that ever
   built successfully is kept for a week as a floor. See "Caching on Vercel".
-- `vercel.json` declares two Vercel Cron Jobs that hit `/api/events` each
-  morning to warm the cache ahead of the first visitor, mirroring the
+- `vercel.json` declares two Vercel Cron Jobs that hit the authenticated
+  `/api/cron/events` route each morning to warm the cache ahead of the first visitor, mirroring the
   scheduled warm-up this project originally ran as a Cloudflare Worker cron
   trigger.
 
@@ -57,7 +58,7 @@ Fetched live on each refresh (see the feed tables at the top of
 | Town of Evans | iCalendar | Evans / Angola / Derby |
 | Southtowns Regional Chamber | iCalendar | Hamburg and Southtowns business events |
 | Explore & More | iCalendar | Children's museum programming |
-| Step Out Buffalo (2 pages) | Scraped HTML | Trivia, bar bingo, brewery tastings, open mics |
+| Step Out Buffalo | Scraped HTML | Trivia, bar bingo, brewery tastings, open mics |
 | East Aurora Chamber | Scraped HTML (schema.org) | East Aurora village events |
 | Erie County Parks | Scraped HTML (Drupal view) | Ranger-led hikes, kids-and-families and nature programs |
 
@@ -159,11 +160,15 @@ posted nothing — worth revisiting when their tour season opens.
 
 ## Deploying to Vercel
 
-This is a standard Next.js app — import the repo in the Vercel dashboard (or
-run `vercel`) and it will be auto-detected and built with no extra
-configuration. No environment variables are required for the app to run. Set
-`NEXT_PUBLIC_SITE_URL` to the canonical production origin for absolute social
-metadata; Vercel's production hostname is used automatically otherwise.
+This is a standard Next.js app — import the GitHub repo in the Vercel dashboard
+and it will be auto-detected and built with no custom build command. The app
+still runs without environment variables, but scheduled warm-ups require
+`CRON_SECRET`; use a long random value and set it in every Vercel environment
+where the cron should run. Vercel sends it to the cron route as a Bearer token.
+
+Set `NEXT_PUBLIC_SITE_URL` to the canonical production origin for absolute
+social metadata; Vercel's production hostname is used automatically otherwise.
+`TICKETMASTER_API_KEY` remains optional.
 
 ### Caching on Vercel
 
@@ -180,12 +185,13 @@ the first reader:
 With neither set it uses an in-process `Map`, which only helps inside a single
 warm instance. Nothing else changes: both backends store the same envelope and
 the route is identical either way. `/api/events` reports which one is live in
-`freshness.store`.
+`freshness.store`. Cache keys include the Vercel environment, keeping preview
+and production data separate even when they share a Redis database.
 
 Three behaviours sit on top of whichever store is in use:
 
-- **Stale-while-revalidate.** A payload is fresh for an hour and stays servable
-  for six hours after that. Past the hour, the route answers from the stale
+- **Stale-while-revalidate.** A payload is fresh for two hours and stays servable
+  for six hours after that. Past the fresh window, the route answers from the stale
   copy immediately and rebuilds in `after()`, once the response is already on
   its way — nobody waits on thirteen live feeds because they happened to be the
   first reader back. A Redis lease and an in-process single-flight guard prevent
@@ -201,14 +207,16 @@ Three behaviours sit on top of whichever store is in use:
   says so: a `last-good` payload gets a banner naming the morning it was
   collected, and a `stale` one marks the "Events updated" row as refreshing.
 
-Fresh responses may sit at the CDN for five minutes; degraded responses are
-`no-store`, so the CDN cannot pin stale data for a day. `/api/health` exposes
+Fresh responses may sit in Vercel's CDN for fifteen minutes; partial responses
+use a two-minute edge window and degraded responses only one minute, so an
+upstream outage cannot pin bad data for a day. `/api/health` exposes
 the last check, per-source duration and count, last success, and consecutive
 failures, returning 503 when the feed set is degraded.
 
-The Vercel Hobby plan limits cron jobs to once a day; the second entry in
-`vercel.json` requires a Pro plan. Trim `vercel.json` to one entry if you're
-on Hobby.
+Vercel cron schedules use UTC. Each configured job runs once per day, which is
+compatible with the Hobby plan; Hobby execution can occur at any point within
+the scheduled hour. The two entries warm the cache around 5 a.m. and 11 a.m.
+Eastern during daylight-saving time.
 
 ## Useful Commands
 

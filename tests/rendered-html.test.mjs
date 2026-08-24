@@ -1,66 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-
-const PORT = 4173 + (process.pid % 1000);
-
-/**
- * Boots the production Next.js server (`next start`, against the build
- * produced by `npm run build`) on a scratch port, fetches "/", and returns
- * the rendered HTML. Assumes `next build` has already been run — CI/local
- * runs should do `npm run build && npm test`.
- */
-async function withServer(run) {
-  const nextBin = fileURLToPath(new URL("../node_modules/next/dist/bin/next", import.meta.url));
-  const child = spawn(process.execPath, [nextBin, "start", "-p", String(PORT)], {
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PORT: String(PORT) },
-  });
-
-  let ready = false;
-  const readyPromise = new Promise((resolve, reject) => {
-    const onData = (chunk) => {
-      const text = chunk.toString();
-      if (/Ready in|started server/i.test(text)) {
-        ready = true;
-        resolve();
-      }
-    };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.once("exit", (code) => {
-      if (!ready) reject(new Error(`next start exited early (code ${code})`));
-    });
-  });
-
-  let readyTimer;
-  try {
-    await Promise.race([
-      readyPromise,
-      new Promise((_, reject) => { readyTimer = setTimeout(() => reject(new Error("next start timed out")), 30_000); }),
-    ]);
-  } finally {
-    clearTimeout(readyTimer);
-  }
-
-  try {
-    return await run(`http://localhost:${PORT}`);
-  } finally {
-    child.kill("SIGTERM");
-    await once(child, "exit").catch(() => {});
-  }
-}
 
 test("server-renders the static events finder with a last-known snapshot", async () => {
-  const html = await withServer(async (base) => {
-    const response = await fetch(base, { headers: { accept: "text/html" } });
-    assert.equal(response.status, 200);
-    assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-    return response.text();
-  });
+  // The route is statically generated, so inspecting Next's production artifact
+  // tests the exact HTML Vercel will serve without booting a disposable server.
+  const html = await readFile(new URL("../.next/server/app/index.html", import.meta.url), "utf8");
 
   assert.match(html, /The 25-Mile Post/);
   assert.match(html, /Cruise Night at the Depot/);
@@ -88,5 +33,5 @@ test("server-renders the static events finder with a last-known snapshot", async
 test("schedules a Vercel Cron warm-up of the events cache", async () => {
   const vercelJson = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
   assert.ok(Array.isArray(vercelJson.crons) && vercelJson.crons.length > 0, "vercel.json must declare crons");
-  assert.ok(vercelJson.crons.every((cron) => cron.path === "/api/events"), "crons should warm the events route");
+  assert.ok(vercelJson.crons.every((cron) => cron.path === "/api/cron/events"), "crons should use the authenticated warm-up route");
 });

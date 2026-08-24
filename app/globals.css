@@ -1,13 +1,11 @@
-@import "tailwindcss";
-
 /* ============================================================
    THE 25-MILE POST — design tokens
    ============================================================ */
 
 :root {
   /* Type */
-  --sans: var(--font-sans), Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --serif: var(--font-serif), "Newsreader", Georgia, "Times New Roman", serif;
+  --sans: "Avenir Next", Avenir, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, "Times New Roman", serif;
 
   /* Spacing / shape */
   --gutter: 28px;
@@ -38,16 +36,16 @@
   --surface-3: #edece8;
   --text: #14181f;
   --text-2: #5c6472;
-  --text-3: #8a919d;
+  --text-3: #636c7a;
   --line: rgba(20, 24, 31, 0.11);
   --line-strong: rgba(20, 24, 31, 0.2);
-  --accent: #d84b34;
+  --accent: #b83b29;
   --accent-ink: #ffffff;
-  --accent-soft: rgba(216, 75, 52, 0.1);
-  --good: #0f9d70;
-  --good-soft: rgba(15, 157, 112, 0.12);
-  --info: #2f77e6;
-  --info-soft: rgba(47, 119, 230, 0.1);
+  --accent-soft: rgba(184, 59, 41, 0.1);
+  --good: #087c58;
+  --good-soft: rgba(8, 124, 88, 0.12);
+  --info: #1769c2;
+  --info-soft: rgba(23, 105, 194, 0.1);
   --warn: #d97706;
   --warn-ink: #92400e;
   --warn-soft: rgba(217, 119, 6, 0.1);
@@ -65,7 +63,7 @@
   --surface-3: #262d39;
   --text: #eef1f6;
   --text-2: #9aa4b3;
-  --text-3: #6f7987;
+  --text-3: #7f8da0;
   --line: rgba(255, 255, 255, 0.1);
   --line-strong: rgba(255, 255, 255, 0.2);
   --accent: #ff7a62;
@@ -93,7 +91,7 @@
     --surface-3: #262d39;
     --text: #eef1f6;
     --text-2: #9aa4b3;
-    --text-3: #6f7987;
+    --text-3: #7f8da0;
     --line: rgba(255, 255, 255, 0.1);
     --line-strong: rgba(255, 255, 255, 0.2);
     --accent: #ff7a62;
@@ -118,7 +116,15 @@
    ============================================================ */
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; scroll-padding-top: calc(var(--topbar-h) + 76px); }
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--topbar-h) + 76px);
+  scrollbar-gutter: stable;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1, h2, h3, h4, p { margin-block: 0; }
+img, picture, video, canvas, svg { display: block; max-width: 100%; }
 
 body {
   margin: 0;
@@ -132,7 +138,7 @@ body {
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }
-button { cursor: pointer; }
+button { margin: 0; background: none; cursor: pointer; }
 
 :where(button, a, input, [tabindex]):focus-visible {
   outline: 2px solid var(--accent);
@@ -396,6 +402,7 @@ button { cursor: pointer; }
 .aside-stack { display: flex; flex-direction: column; gap: 12px; }
 
 .wcard {
+  min-height: 268px;
   padding: 20px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
@@ -431,6 +438,23 @@ button { cursor: pointer; }
 }
 .wcard-row:last-child { border-bottom: 0; }
 .wcard-row b { color: var(--text); font-weight: 700; }
+
+.weather-skeleton {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+.weather-skeleton > * {
+  display: block;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+.weather-skeleton > :nth-child(1) { width: 42%; }
+.weather-skeleton > :nth-child(2) { width: 58%; height: 42px; margin-bottom: 2px; }
+.weather-skeleton > :nth-child(n + 3) { width: 100%; }
 
 .glance { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
 .glance-cell { padding: 14px 12px; background: var(--surface); text-align: center; }
@@ -645,34 +669,6 @@ button { cursor: pointer; }
 .filterbar-inner > .filters-desktop { display: contents; }
 .filterbar-inner > .filters-mobile { display: none; }
 
-.segmented {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: var(--surface-2);
-}
-.segmented button {
-  height: 30px;
-  padding: 0 13px;
-  white-space: nowrap;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--text-2);
-  font: 700 13px/1 var(--sans);
-  transition: background var(--fast), color var(--fast);
-}
-.segmented button:hover { color: var(--text); }
-.segmented button[aria-pressed="true"] {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-1);
-}
-
-.divider-v { width: 1px; height: 26px; background: var(--line); }
-
 /* Dropdown menus -------------------------------------------- */
 .fmenu { position: relative; }
 .fmenu-btn {
@@ -734,8 +730,6 @@ button { cursor: pointer; }
 .fmenu-opt:hover { background: var(--surface-2); }
 .fmenu-opt[aria-checked="true"] { color: var(--accent); font-weight: 800; }
 .fmenu-opt svg { width: 15px; height: 15px; flex: none; }
-.fmenu-sep { height: 1px; margin: 5px 6px; background: var(--line); }
-
 /* Active filter pills --------------------------------------- */
 .actives {
   display: flex;
@@ -836,24 +830,6 @@ button { cursor: pointer; }
   color: var(--text-2);
 }
 
-/* Day group -------------------------------------------------- */
-.daygroup + .daygroup { margin-top: 30px; }
-.day-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-.day-head h3 {
-  margin: 0;
-  font: 800 13px/1 var(--sans);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text);
-}
-.day-head span { color: var(--text-3); font: 700 12px/1 var(--sans); }
-.day-head .rule { flex: 1; height: 1px; background: var(--line); }
-
 /* ============================================================
    Event cards
    ============================================================ */
@@ -877,6 +853,7 @@ button { cursor: pointer; }
   overflow: hidden;
   transition: transform var(--med), box-shadow var(--med), border-color var(--med);
 }
+.card-body > h3 { margin: 0; font: inherit; }
 .card:hover { transform: translateY(-3px); box-shadow: var(--shadow-2); border-color: var(--line-strong); }
 .card:focus-within { border-color: var(--accent); }
 
@@ -1046,16 +1023,6 @@ button { cursor: pointer; }
 .card-acts { display: flex; gap: 6px; flex: none; }
 .card-acts .icon-btn { height: 32px; min-width: 32px; padding: 0 8px; background: var(--surface); }
 
-/* Skeletons -------------------------------------------------- */
-.sk { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
-.sk-media { height: 132px; }
-.sk-body { padding: 16px 17px; display: flex; flex-direction: column; gap: 10px; }
-.sk-line { height: 11px; border-radius: 6px; }
-.sk-media, .sk-line {
-  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
-  background-size: 400% 100%;
-  animation: shimmer 1.4s ease-in-out infinite;
-}
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
 /* Empty state ------------------------------------------------ */
@@ -1366,26 +1333,29 @@ button { cursor: pointer; }
   .hero { padding: 26px 0 24px; }
   .hero-sub { font-size: 15px; }
   .search { height: 50px; }
+  .search input { font-size: 16px; }
   .wordmark-text span { display: none; }
   .topbar-weather { display: none; }
   /* The hero search and the My Day FAB already cover these on small screens. */
   .topbar-actions > .topbar-search, .topbar-actions > .topbar-myday { display: none; }
   .aside-stack { flex-direction: column; }
+  .wcard, .glance { flex: none; width: 100%; }
+  .topbar, .filterbar { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .section { padding-top: 28px; }
   .grid { grid-template-columns: 1fr; gap: 14px; }
   .facts { grid-template-columns: 1fr; }
   .fab { display: inline-flex; }
   .filterbar-inner > .filters-desktop { display: none; }
   .filterbar-inner > .filters-mobile { display: inline-flex; }
-  .divider-v { display: none; }
-  /* Area picker gets its own full-width row; Filters + Saved share the next one. */
-  .segmented { flex: 1 0 100%; }
-  .segmented button { flex: 1; padding: 0 8px; }
   .filterbar-inner > .fmenu-btn { flex: 1 1 auto; justify-content: center; }
   .filterbar-inner { gap: 8px; padding-block: 9px; }
   .toast { bottom: 78px; }
   .drawer { width: 100%; }
   .footer-inner { flex-direction: column; }
+}
+
+@supports (content-visibility: auto) {
+  .card { content-visibility: auto; contain-intrinsic-size: auto 430px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

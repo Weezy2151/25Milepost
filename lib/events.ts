@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isAllowedEventImage } from "./image-hosts.ts";
 
 export const AREAS = ["southtowns", "city"] as const;
 export const EVENT_KINDS = [
@@ -18,8 +19,8 @@ export const areaSchema = z.enum(AREAS);
 export const eventKindSchema = z.enum(EVENT_KINDS);
 export const eventSettingSchema = z.enum(EVENT_SETTINGS);
 export const distancePrecisionSchema = z.enum(DISTANCE_PRECISIONS);
-const webUrlSchema = z.url().refine((value) => /^https?:\/\//i.test(value), "Expected an HTTP(S) URL");
-const imageUrlSchema = z.string().refine((value) => value.startsWith("/") || /^https:\/\//i.test(value), "Expected a local or HTTPS image URL");
+const webUrlSchema = z.url().max(2_048).refine((value) => /^https?:\/\//i.test(value), "Expected an HTTP(S) URL");
+const imageUrlSchema = z.string().max(2_048).refine(isAllowedEventImage, "Expected an image URL from a trusted origin");
 
 /** The normalized event contract shared by the API, cache, and live client. */
 export const liveEventSchema = z.object({
@@ -72,7 +73,7 @@ export const sourceHealthSchema = z.object({
 });
 
 export const eventsPayloadSchema = z.object({
-  events: z.array(liveEventSchema),
+  events: z.array(liveEventSchema).max(300),
   count: z.number().int().nonnegative(),
   updatedAt: z.iso.datetime(),
   window: z.object({ from: z.iso.date(), to: z.iso.date() }),
@@ -84,36 +85,3 @@ export const eventsPayloadSchema = z.object({
 export type Freshness = z.infer<typeof freshnessSchema>;
 export type SourceHealth = z.infer<typeof sourceHealthSchema>;
 export type EventsPayload = z.infer<typeof eventsPayloadSchema>;
-
-/** Parse untrusted JSON without letting one malformed event crash the page. */
-export function parseEventsPayload(value: unknown): EventsPayload | null {
-  const parsed = eventsPayloadSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
-
-export function parseStoredIds(value: string | null): string[] {
-  if (!value) return [];
-  try {
-    const parsed = z.array(z.string().min(1).max(240)).max(500).safeParse(JSON.parse(value));
-    return parsed.success ? [...new Set(parsed.data)] : [];
-  } catch {
-    return [];
-  }
-}
-
-export const storedPlanItemSchema = z.object({ id: z.string().min(1).max(240), title: z.string().min(1).max(300) });
-export type StoredPlanItem = z.infer<typeof storedPlanItemSchema>;
-
-/** Read the v2 itinerary format and migrate the previous array of full events. */
-export function parseStoredPlan(value: string | null): StoredPlanItem[] {
-  if (!value) return [];
-  try {
-    const json: unknown = JSON.parse(value);
-    const current = z.object({ version: z.literal(2), items: z.array(storedPlanItemSchema).max(100) }).safeParse(json);
-    if (current.success) return current.data.items;
-    const legacy = z.array(storedPlanItemSchema.passthrough()).max(100).safeParse(json);
-    return legacy.success ? legacy.data.map(({ id, title }) => ({ id, title })) : [];
-  } catch {
-    return [];
-  }
-}

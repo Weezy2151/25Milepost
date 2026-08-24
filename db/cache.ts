@@ -86,12 +86,15 @@ const memoryBackend: Backend = {
  * /set/<key>?EX=<seconds>` takes the value as the raw request body.
  */
 function redisBackend(): Backend | null {
-  const url = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
+  const credentials = process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN
+    ? { url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN }
+    : process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+      ? { url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN }
+      : null;
+  if (!credentials) return null;
 
-  const origin = url.replace(/\/+$/, "");
-  const auth = { authorization: `Bearer ${token}` };
+  const origin = credentials.url.replace(/\/+$/, "");
+  const auth = { authorization: `Bearer ${credentials.token}` };
 
   return {
     name: "redis",
@@ -116,10 +119,13 @@ function redisBackend(): Backend | null {
       if (!response.ok) throw new Error(`cache SET ${response.status}`);
     },
     async acquire(key, ttlSeconds) {
-      const response = await fetch(
-        `${origin}/set/${encodeURIComponent(key)}/locked?NX=true&EX=${Math.max(1, Math.round(ttlSeconds))}`,
-        { method: "POST", headers: auth, signal: AbortSignal.timeout(2000), cache: "no-store" },
-      );
+      const response = await fetch(origin, {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify(["SET", key, "locked", "NX", "EX", Math.max(1, Math.round(ttlSeconds))]),
+        signal: AbortSignal.timeout(2000),
+        cache: "no-store",
+      });
       if (!response.ok) throw new Error(`cache lock ${response.status}`);
       const body = (await response.json()) as { result?: string | null };
       return body.result === "OK";
@@ -128,6 +134,12 @@ function redisBackend(): Backend | null {
 }
 
 let resolved: Backend | undefined;
+
+const cacheNamespace = `25milepost:${process.env.VERCEL_ENV ?? "local"}`;
+
+function scopedKey(key: string) {
+  return `${cacheNamespace}:${key}`;
+}
 
 function backend(): Backend {
   // Resolved once per instance: the env vars cannot change under a running
@@ -151,7 +163,7 @@ export function cacheBackendName() {
 export async function getCachedEntry<T>(key: string): Promise<CacheEntry<T> | null> {
   let raw: string | null;
   try {
-    raw = await backend().get(key);
+    raw = await backend().get(scopedKey(key));
   } catch {
     // A cache that is down is a slow path, not an error: fall through to a
     // live rebuild rather than failing the request.
@@ -195,7 +207,7 @@ export async function setCachedData<T>(
 ): Promise<void> {
   const now = Date.now();
   const envelope: Envelope<T> = { storedAt: now, freshUntil: now + ttlSeconds * 1000, data };
-  await backend().set(key, JSON.stringify(envelope), ttlSeconds + graceSeconds);
+  await backend().set(scopedKey(key), JSON.stringify(envelope), ttlSeconds + graceSeconds);
 }
 
 /**
@@ -205,7 +217,7 @@ export async function setCachedData<T>(
  */
 export async function acquireCacheLock(key: string, ttlSeconds: number): Promise<boolean> {
   try {
-    return await backend().acquire(key, ttlSeconds);
+    return await backend().acquire(scopedKey(key), ttlSeconds);
   } catch {
     return true;
   }

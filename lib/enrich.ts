@@ -7,6 +7,8 @@
  * have real photography instead of a pattern tile.
  */
 
+import { createHash } from "node:crypto";
+
 import { getCachedData, setCachedData } from "../db/cache.ts";
 import { assertSafePublicUrl, EVENT_IMAGE_HOSTS, EVENT_PAGE_HOSTS, fetchPublicText } from "./safe-fetch.ts";
 
@@ -94,9 +96,20 @@ const OG_TTL_SECONDS = 60 * 60 * 24 * 30; // Images move rarely; keep them a mon
 const OG_TIMEOUT_MS = 2500;
 /** Hard ceiling per refresh so a slow source can never stall the whole payload. */
 const OG_BUDGET = 12;
+/** Avoid one Redis REST read for every item in a pathological feed. */
+const OG_CACHE_LOOKUP_BUDGET = 48;
 
 function ogKey(url: string) {
-  return `og:${url}`;
+  return `og:${createHash("sha256").update(url).digest("base64url")}`;
+}
+
+function canonicalPageUrl(raw: string) {
+  const url = assertSafePublicUrl(raw, [...EVENT_PAGE_HOSTS]);
+  url.hash = "";
+  for (const key of [...url.searchParams.keys()]) {
+    if (/^(?:utm_|fbclid$|gclid$)/i.test(key)) url.searchParams.delete(key);
+  }
+  return url.toString();
 }
 
 function absolute(candidate: string, base: string) {
@@ -157,32 +170,45 @@ async function fetchOgImage(url: string): Promise<string | null> {
  * Returns a url -> image map; misses are cached as "" so we stop retrying them.
  */
 export async function resolveImages(urls: string[]): Promise<Map<string, string>> {
-  const unique = [...new Set(urls.filter((url) => {
+  const originalsByCanonical = new Map<string, string[]>();
+  for (const original of urls) {
     try {
-      assertSafePublicUrl(url, [...EVENT_PAGE_HOSTS]);
-      return true;
+      const canonical = canonicalPageUrl(original);
+      const originals = originalsByCanonical.get(canonical) ?? [];
+      originals.push(original);
+      originalsByCanonical.set(canonical, originals);
     } catch {
-      return false;
+      // Ignore event links outside the page allowlist.
     }
-  }))];
+  }
+  const unique = [...originalsByCanonical.keys()].slice(0, OG_CACHE_LOOKUP_BUDGET);
   const resolved = new Map<string, string>();
   const pending: string[] = [];
+  const applyImage = (canonical: string, image: string) => {
+    for (const original of originalsByCanonical.get(canonical) ?? []) resolved.set(original, image);
+  };
 
   const cachedEntries = await Promise.all(unique.map((url) => getCachedData<string>(ogKey(url))));
   unique.forEach((url, index) => {
     const cached = cachedEntries[index];
     if (cached === null) pending.push(url);
-    else if (cached) resolved.set(url, cached);
+    else if (cached) applyImage(url, cached);
   });
 
   const batch = pending.slice(0, OG_BUDGET);
-  await Promise.all(
+  const writes = await Promise.all(
     batch.map(async (url) => {
       const image = await fetchOgImage(url);
-      await setCachedData(ogKey(url), image ?? "", OG_TTL_SECONDS);
-      if (image) resolved.set(url, image);
+      if (image) applyImage(url, image);
+      try {
+        await setCachedData(ogKey(url), image ?? "", OG_TTL_SECONDS);
+        return true;
+      } catch {
+        return false;
+      }
     }),
   );
+  if (writes.some((ok) => !ok)) console.warn("[events] one or more preview-image cache writes failed");
 
   return resolved;
 }

@@ -1,7 +1,16 @@
 import type { SVGProps } from "react";
 
 export type IconProps = SVGProps<SVGSVGElement>;
-const svg = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+const svg = {
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 2,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  "aria-hidden": true,
+  focusable: false,
+};
 
 export const IconSearch = (p: IconProps) => <svg {...svg} {...p}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>;
 export const IconX = (p: IconProps) => <svg {...svg} {...p}><path d="M18 6 6 18M6 6l12 12" /></svg>;
