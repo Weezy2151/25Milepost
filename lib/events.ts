@@ -73,7 +73,7 @@ export const sourceHealthSchema = z.object({
 });
 
 export const eventsPayloadSchema = z.object({
-  events: z.array(liveEventSchema).max(300),
+  events: z.array(liveEventSchema).max(1_000),
   count: z.number().int().nonnegative(),
   updatedAt: z.iso.datetime(),
   window: z.object({ from: z.iso.date(), to: z.iso.date() }),

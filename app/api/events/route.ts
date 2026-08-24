@@ -237,8 +237,8 @@ function inferSetting(title: string, description: string, venue: string, tags: s
  */
 const FEED_TIMEOUT_MS = 12_000;
 
-async function fetchWithTimeout(url: string, headers: HeadersInit, timeoutMs = 4000): Promise<string> {
-  return fetchPublicText(url, { headers, timeoutMs, maxBytes: 3_000_000 });
+async function fetchWithTimeout(url: string, headers: HeadersInit, timeoutMs = 4000, maxBytes = 3_000_000): Promise<string> {
+  return fetchPublicText(url, { headers, timeoutMs, maxBytes });
 }
 
 function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[] {
@@ -628,7 +628,7 @@ function parseScraped(
   // listing later in the page. Venue diversity prevents a fair's dozens of
   // micro-events from consuming the whole day.
   scoredEvents.sort((a, b) => b.interest - a.interest || b.event.priority - a.event.priority || a.event.time.localeCompare(b.event.time));
-  const dailyLimit = parser === "stepout" ? 45 : 12;
+  const dailyLimit = parser === "stepout" ? 80 : 12;
   const perDay = new Map<string, number>();
   const perVenueDay = new Map<string, number>();
   return scoredEvents.filter(({ event }) => {
@@ -636,7 +636,7 @@ function parseScraped(
     if (count >= dailyLimit) return false;
     const venueKey = `${event.dateKey}|${event.venue.toLowerCase()}`;
     const venueCount = perVenueDay.get(venueKey) ?? 0;
-    if (parser === "stepout" && venueCount >= 4) return false;
+    if (parser === "stepout" && venueCount >= 8) return false;
     perDay.set(event.dateKey, count + 1);
     perVenueDay.set(venueKey, venueCount + 1);
     return true;
@@ -1397,7 +1397,10 @@ const CACHE_TTL_SECONDS = 2 * 3600;
 const CACHE_GRACE_SECONDS = 6 * 3600;
 /** The safety net keeps a week, so a multi-day outage still has real listings. */
 const LAST_GOOD_TTL_SECONDS = 7 * 24 * 3600;
-const MAX_EVENTS = 300;
+// Eight days at an 80-card Step Out allowance plus municipal/library feeds can
+// legitimately exceed 600. Keep a generous payload ceiling so later week days
+// are not truncated after the first few busy dates.
+const MAX_EVENTS = 1_000;
 const FULL_CACHE_CONTROL = {
   browser: "public, max-age=60, must-revalidate",
   cdn: "public, max-age=300, stale-while-revalidate=60",
@@ -1415,7 +1418,7 @@ const DEGRADED_CACHE_CONTROL = {
 };
 
 function cacheKeyFor(todayKey: string) {
-  return `events:balanced-v5:${todayKey}`;
+  return `events:balanced-v9:${todayKey}`;
 }
 
 /**
@@ -1426,7 +1429,7 @@ function cacheKeyFor(todayKey: string) {
  * — a hardcoded copy from months ago. Yesterday's real listings are wrong
  * about which day it is; the snapshot is wrong about everything.
  */
-const LAST_GOOD_KEY = "events:balanced-v5:last-good";
+const LAST_GOOD_KEY = "events:balanced-v9:last-good";
 const REFRESH_LOCK_SECONDS = maxDuration + 5;
 
 function validPayload(value: unknown): EventsPayload | null {
@@ -1589,7 +1592,15 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     }),
     ...SCRAPED_FEEDS.map(async ([name, url, parser, area, town]) => {
       const started = Date.now();
-      const text = await fetchWithTimeout(url, { ...headers, "accept-encoding": "gzip, deflate" }, FEED_TIMEOUT_MS);
+      // Step Out's all-events index is intentionally exhaustive and is larger
+      // than the compact category pages; keep the tighter limit for every
+      // other scrape while allowing this one page to be read completely.
+      const text = await fetchWithTimeout(
+        url,
+        { ...headers, "accept-encoding": "gzip, deflate" },
+        FEED_TIMEOUT_MS,
+        parser === "stepout" ? 8_000_000 : 3_000_000,
+      );
       return { name, kind: "scrape" as const, parser, area, town, text, durationMs: Date.now() - started };
     }),
     ...ticketmasterRequest(todayKey, endKey, headers),

@@ -95,7 +95,7 @@ function isSourceHealth(value: unknown): value is SourceHealth {
  * cache entry or unexpected response from crashing the interactive page.
  */
 export function parseEventsPayload(value: unknown): EventsPayload | null {
-  if (!isRecord(value) || !Array.isArray(value.events) || value.events.length > 300 || !value.events.every(isLiveEvent)) return null;
+  if (!isRecord(value) || !Array.isArray(value.events) || value.events.length > 1_000 || !value.events.every(isLiveEvent)) return null;
   if (!Array.isArray(value.sources) || value.sources.length > 100 || !value.sources.every(isSourceHealth)) return null;
   if (!Number.isInteger(value.count) || value.count !== value.events.length || !isNonEmptyString(value.updatedAt) || Number.isNaN(Date.parse(value.updatedAt))) return null;
   if (!isRecord(value.window) || !isDateKey(value.window.from) || !isDateKey(value.window.to)) return null;
