@@ -362,11 +362,32 @@ export default function Home() {
 
   const matchesVibe = useCallback((event: EventPick, choice: Vibe, text: string) => {
     if (choice === "all") return true;
-    if (choice === "outside") return event.setting === "outdoor" || event.setting === "both" || /park|trail|hike|nature|outdoor|lawn/i.test(text);
-    if (choice === "kids") return /kids|family|children|storytime|play|animals|museum/i.test(text) || event.kind === "Library";
-    if (choice === "food") return event.kind === "Markets & food" || /market|produce|farm|food|tasting|bakery/i.test(text);
-    if (choice === "evening") return /pm|night|sunset|concert|game|after/i.test(event.time) || /concert|music|theater|bills|bisons/i.test(text);
-    if (choice === "rain") return event.setting === "indoor" || /museum|indoor|library|play cafe|escape|theatre/i.test(text);
+    if (choice === "outside") {
+      if (event.setting === "outdoor" || event.setting === "both") return true;
+      // Match outdoor-oriented keywords but NOT town names like "Orchard Park"
+      return /\b(trail|hike|hiking|nature|outdoor|lawn|garden|beach|waterfront)\b/i.test(text)
+        || /\bpark\b/i.test(event.venue) || /\bpark\b/i.test(event.title);
+    }
+    if (choice === "kids") {
+      // Exclude age-gated events — 18+/21+ bars, breweries, etc.
+      if (/\b(18\+|21\+|adults?\s*only)\b/i.test(text) || event.tags?.includes("21+")) return false;
+      return /\b(kids|family|children|storytime|playground|playhouse|play cafe|play area|animals|museum)\b/i.test(text) || event.kind === "Library";
+    }
+    if (choice === "food") return event.kind === "Markets & food" || /\b(market|produce|farm|food|tasting|bakery|food truck)\b/i.test(text);
+    if (choice === "evening") {
+      // Check whether the event actually starts at or after 5 PM
+      const hourMatch = event.time.match(/(\d{1,2})(?::\d{2})?\s*(AM|PM)/i);
+      if (hourMatch) {
+        const hour = Number(hourMatch[1]);
+        const isPm = /pm/i.test(hourMatch[2]);
+        const hour24 = isPm ? (hour === 12 ? 12 : hour + 12) : (hour === 12 ? 0 : hour);
+        if (hour24 >= 17) return true;
+      }
+      // Also match explicitly evening-oriented content
+      return /\b(night|sunset|evening)\b/i.test(event.time)
+        || /\b(concert|live music|theater|theatre|bills|bisons)\b/i.test(text);
+    }
+    if (choice === "rain") return event.setting === "indoor" || /\b(museum|indoor|library|play cafe|escape|theatre)\b/i.test(text);
     if (choice === "drive") return event.distance >= 12;
     return true;
   }, []);
@@ -378,7 +399,10 @@ export default function Home() {
     const list: EventPick[] = [];
     for (const { event, text } of searchableEvents) {
       if (kind !== "All activities" && event.kind !== kind && !(!event.kind && event.tags.includes(kind))) continue;
-      if (setting !== "all" && event.setting !== setting && event.setting !== "both" && event.setting) continue;
+      if (setting !== "all") {
+        const eventSetting = event.setting || "both";
+        if (eventSetting !== setting && eventSetting !== "both") continue;
+      }
       if (maxDistance !== null && event.distance > maxDistance) continue;
       if (!matchesVibe(event, vibe, text)) continue;
       if (showSaved && !savedSet.has(event.id)) continue;

@@ -1380,11 +1380,17 @@ function dedupe(events: LiveEvent[]) {
   });
 }
 
-/** Inclusive occurrence keys, clipped to the API's visible date window. */
+/** Inclusive occurrence keys, clipped to the API's visible date window.
+ *  Spans longer than 14 days are almost certainly scraped tour listings or
+ *  season-long ranges, not genuine daily events — collapse them to the first
+ *  date rather than cloning the event onto every intervening day. */
 function dateKeysInRange(startKey: string, endKey: string, windowStart: string, windowEnd: string) {
   const first = startKey < windowStart ? windowStart : startKey;
   const last = endKey > windowEnd ? windowEnd : endKey;
   if (first > last) return [];
+  // Safety cap: a 14+ day span is a season/tour, not a daily event.
+  const daySpan = Math.round((new Date(`${last}T12:00:00Z`).getTime() - new Date(`${first}T12:00:00Z`).getTime()) / 86_400_000);
+  if (daySpan > 14) return [first];
   const keys: string[] = [];
   for (let key = first; key <= last; key = addDays(key, 1)) keys.push(key);
   return keys;

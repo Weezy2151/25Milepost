@@ -108,11 +108,16 @@ function readDateCell(cell: string, todayKey: string) {
 
   const start = resolveYear(found[0][0], found[0][1], todayKey);
   const second = found[1] ? resolveYear(found[1][0], found[1][1], todayKey) : start;
+  const isRecurring = /\+\s*more dates/i.test(dates);
   return {
     start,
-    end: second >= start ? second : start,
+    // "+more dates" signals discrete future occurrences (tour stops, weekly
+    // repeats), not a continuous all-day-every-day run.  Collapse to the first
+    // date so downstream dateKeysInRange does not clone the event onto every
+    // intervening day.
+    end: isRecurring ? start : (second >= start ? second : start),
     time: readTime(rest.join("•").trim()),
-    recurring: /\+\s*more dates/i.test(dates),
+    recurring: isRecurring,
   };
 }
 
