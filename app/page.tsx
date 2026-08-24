@@ -204,6 +204,7 @@ const FETCHED_SOURCES: Array<[string, string]> = [
   ["EverythingOP", "https://everythingop.com/events/"],
   ["Orchard Park Chamber", "https://orchardparkchamber.org/events/"],
   ["Buffalo Rising", "https://www.buffalorising.com/events/"],
+  ["Visit Buffalo", "https://visitbuffalo.com/events/"],
   ["Town of Orchard Park", "https://www.orchardparkny.gov/events/"],
   ["Town of Evans", "https://townofevansny.gov/events/"],
   ["Southtowns Regional Chamber", "https://southtownsregionalchamber.org/news-events/"],

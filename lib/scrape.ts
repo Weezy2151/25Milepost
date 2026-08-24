@@ -149,6 +149,43 @@ export function parseStepOutBuffalo(html: string, todayKey: string): ScrapedEven
   });
 }
 
+/* ------------------------------------------------------------ Visit Buffalo */
+
+/**
+ * Visit Buffalo's public calendar uses a small, stable card template rather
+ * than an iCalendar feed. The page is paginated with `tribe_paged`; the route
+ * fetches the pages covering the current window before calling this parser.
+ */
+export function parseVisitBuffalo(html: string, todayKey: string): ScrapedEvent[] {
+  return cardSlices(html, /<div class="eventGridItem\b[^>]*>/g, 12000).flatMap((card) => {
+    const title = text(card.match(/<h3 class="title">([\s\S]*?)<\/h3>/)?.[1]);
+    const url = card.match(/<a href="(https:\/\/visitbuffalo\.com\/event\/[^"]+)"/)?.[1];
+    const dateRaw = text(card.match(/<p class="info">\s*<span[^>]*aria-label="Date"[^>]*><\/span>([\s\S]*?)<\/p>/)?.[1]);
+    const dateMatch = dateRaw.match(/(\d{1,2})\/(\d{1,2})/);
+    if (!title || !url || !dateMatch) return [];
+
+    const start = resolveYear(Number(dateMatch[1]), Number(dateMatch[2]), todayKey);
+    const location = text(card.match(/<p class="info">\s*<span[^>]*aria-label="Location"[^>]*><\/span>([\s\S]*?)<\/p>/)?.[1]);
+    const description = text(card.match(/<p class="details">([\s\S]*?)<\/p>/)?.[1]);
+    const image = card.match(/data-load-all="(https:\/\/visitbuffalo\.com\/wp-content\/uploads\/[^"]+)"/)?.[1];
+    const recurring = Boolean(card.match(/data-recurrence="([^"]+)"/i)?.[1]);
+
+    return [{
+      title,
+      url: decodeEntities(url),
+      start,
+      end: start,
+      time: "See listing",
+      venue: location,
+      address: location,
+      category: "",
+      description,
+      image,
+      recurring,
+    }];
+  });
+}
+
 /* -------------------------------------------------------- GrowthZone / MicroNet */
 
 /**

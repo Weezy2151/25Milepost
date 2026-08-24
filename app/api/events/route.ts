@@ -7,7 +7,7 @@ import { eventsPayloadSchema, liveEventSchema, type EventKind, type EventsPayloa
 import { EVENTS_HEALTH_KEY, healthSnapshotSchema, type HealthSnapshot } from "../../../lib/health";
 import { parseIcalOccurrences } from "../../../lib/ical";
 import { assertSafePublicUrl, EVENT_IMAGE_HOSTS, fetchPublicText } from "../../../lib/safe-fetch";
-import { parseErieParks, parseGrowthZone, parseStepOutBuffalo, type ScrapedEvent } from "../../../lib/scrape";
+import { parseErieParks, parseGrowthZone, parseStepOutBuffalo, parseVisitBuffalo, type ScrapedEvent } from "../../../lib/scrape";
 
 export type { EventSetting, LiveEvent } from "../../../lib/events";
 
@@ -68,10 +68,11 @@ const ICS_FEEDS = [
  * `kind` picks the parser; `town` is the fallback patch for a source whose
  * cards carry no address of their own.
  */
-type ScrapeParser = "stepout" | "growthzone" | "erieparks";
+type ScrapeParser = "stepout" | "visitbuffalo" | "growthzone" | "erieparks";
 
 const SCRAPED_FEEDS: ReadonlyArray<readonly [string, string, ScrapeParser, "southtowns" | "city", string]> = [
   ["Step Out Buffalo", "https://stepoutbuffalo.com/all-events/", "stepout", "southtowns", ""],
+  ["Visit Buffalo", "https://visitbuffalo.com/events/", "visitbuffalo", "city", "Buffalo"],
   ["East Aurora Chamber", "https://business.eanycc.com/eventcalendar", "growthzone", "southtowns", "East Aurora"],
   ["Erie County Parks", "https://www3.erie.gov/parks/events", "erieparks", "southtowns", ""],
 ] as const;
@@ -1418,7 +1419,7 @@ const DEGRADED_CACHE_CONTROL = {
 };
 
 function cacheKeyFor(todayKey: string) {
-  return `events:balanced-v9:${todayKey}`;
+  return `events:balanced-v10:${todayKey}`;
 }
 
 /**
@@ -1429,7 +1430,7 @@ function cacheKeyFor(todayKey: string) {
  * — a hardcoded copy from months ago. Yesterday's real listings are wrong
  * about which day it is; the snapshot is wrong about everything.
  */
-const LAST_GOOD_KEY = "events:balanced-v9:last-good";
+const LAST_GOOD_KEY = "events:balanced-v10:last-good";
 const REFRESH_LOCK_SECONDS = maxDuration + 5;
 
 function validPayload(value: unknown): EventsPayload | null {
@@ -1567,6 +1568,27 @@ async function fetchTribePages(origin: string, todayKey: string, endKey: string,
   return JSON.stringify({ ...first, events });
 }
 
+/** Visit Buffalo paginates its HTML calendar with `tribe_paged`. Six pages
+ * cover the visible week in normal conditions while keeping the scrape bounded
+ * if the site grows a much longer archive. */
+async function fetchVisitBuffaloPages(url: string, todayKey: string, endKey: string, headers: HeadersInit) {
+  const firstUrl = new URL(url);
+  // Visit Buffalo exposes the same controls as query parameters. Supplying the
+  // exact window keeps its pagination focused on the dates the app displays.
+  firstUrl.searchParams.set("event-date-from", todayKey);
+  firstUrl.searchParams.set("event-date-to", endKey);
+  const visitHeaders = { ...headers, "user-agent": "Wget/1.21.4" };
+  const firstText = await fetchWithTimeout(firstUrl.toString(), visitHeaders, FEED_TIMEOUT_MS, 8_000_000);
+  const pages = await Promise.all(
+    Array.from({ length: 5 }, async (_, index) => {
+      const pageUrl = new URL(firstUrl);
+      pageUrl.searchParams.set("tribe_paged", String(index + 2));
+      return fetchWithTimeout(pageUrl.toString(), visitHeaders, FEED_TIMEOUT_MS, 8_000_000);
+    }),
+  );
+  return [firstText, ...pages].join("\n");
+}
+
 async function buildEventsPayload(): Promise<EventsPayload> {
   const todayKey = localDateKey();
   const endKey = addDays(todayKey, 7);
@@ -1595,12 +1617,14 @@ async function buildEventsPayload(): Promise<EventsPayload> {
       // Step Out's all-events index is intentionally exhaustive and is larger
       // than the compact category pages; keep the tighter limit for every
       // other scrape while allowing this one page to be read completely.
-      const text = await fetchWithTimeout(
-        url,
-        { ...headers, "accept-encoding": "gzip, deflate" },
-        FEED_TIMEOUT_MS,
-        parser === "stepout" ? 8_000_000 : 3_000_000,
-      );
+      const text = parser === "visitbuffalo"
+        ? await fetchVisitBuffaloPages(url, todayKey, endKey, headers)
+        : await fetchWithTimeout(
+            url,
+            { ...headers, "accept-encoding": "gzip, deflate" },
+            FEED_TIMEOUT_MS,
+            parser === "stepout" ? 8_000_000 : 3_000_000,
+          );
       return { name, kind: "scrape" as const, parser, area, town, text, durationMs: Date.now() - started };
     }),
     ...ticketmasterRequest(todayKey, endKey, headers),
@@ -1637,9 +1661,11 @@ async function buildEventsPayload(): Promise<EventsPayload> {
         events.push(...parseTicketmaster(result.value.text, todayKey, endKey));
       } else if (result.value.kind === "scrape") {
         const scraped =
-          result.value.parser === "stepout"
-            ? parseStepOutBuffalo(result.value.text, todayKey)
-            : result.value.parser === "erieparks"
+        result.value.parser === "stepout"
+          ? parseStepOutBuffalo(result.value.text, todayKey)
+          : result.value.parser === "visitbuffalo"
+            ? parseVisitBuffalo(result.value.text, todayKey)
+          : result.value.parser === "erieparks"
               ? parseErieParks(result.value.text)
               : parseGrowthZone(result.value.text);
         events.push(
