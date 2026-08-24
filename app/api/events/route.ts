@@ -1419,7 +1419,7 @@ const DEGRADED_CACHE_CONTROL = {
 };
 
 function cacheKeyFor(todayKey: string) {
-  return `events:balanced-v10:${todayKey}`;
+  return `events:balanced-v11:${todayKey}`;
 }
 
 /**
@@ -1430,7 +1430,7 @@ function cacheKeyFor(todayKey: string) {
  * — a hardcoded copy from months ago. Yesterday's real listings are wrong
  * about which day it is; the snapshot is wrong about everything.
  */
-const LAST_GOOD_KEY = "events:balanced-v10:last-good";
+const LAST_GOOD_KEY = "events:balanced-v11:last-good";
 const REFRESH_LOCK_SECONDS = maxDuration + 5;
 
 function validPayload(value: unknown): EventsPayload | null {
@@ -1675,13 +1675,14 @@ async function buildEventsPayload(): Promise<EventsPayload> {
         events.push(...parseIcs(result.value.text, name, result.value.area, todayKey, endKey));
       }
       const count = events.length - before;
-      if (count === 0) console.warn(`[events] source returned no usable events: ${name}`);
+      // A valid calendar can legitimately be quiet inside an eight-day window.
+      // It still responded and should not trigger the site's outage warning.
+      if (count === 0) console.info(`[events] source has no matching events in the requested window: ${name}`);
       return {
         name,
-        ok: count > 0,
+        ok: true,
         count,
         durationMs: result.value.durationMs,
-        ...(count === 0 ? { error: "No usable events in the requested window" } : {}),
       };
     } catch (error) {
       events.splice(before);
