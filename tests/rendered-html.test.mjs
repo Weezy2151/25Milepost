@@ -2,17 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("server-renders the static events finder with a last-known snapshot", async () => {
+test("server-renders a safe loading state instead of stale event cards", async () => {
   // The route is statically generated, so inspecting Next's production artifact
   // tests the exact HTML Vercel will serve without booting a disposable server.
   const html = await readFile(new URL("../.next/server/app/index.html", import.meta.url), "utf8");
 
   assert.match(html, /The 25-Mile Post/);
-  assert.match(html, /Cruise Night at the Depot/);
-  assert.doesNotMatch(html, /Fossil Frenzy Play Cafe/);
-  assert.match(html, /Erie County Fair/);
-  assert.doesNotMatch(html, /Au-Some Morning Edition/);
-  assert.match(html, /Pick a day this week/);
+  assert.match(html, /Loading live calendars/);
+  assert.doesNotMatch(html, /Cruise Night at the Depot/);
+  assert.doesNotMatch(html, /Erie County Fair/);
   assert.match(html, /Town of Orchard Park/);
   assert.match(html, /Village of Hamburg/);
   assert.match(html, /Orchard Park Bee/);
@@ -23,11 +21,7 @@ test("server-renders the static events finder with a last-known snapshot", async
   assert.match(html, /Hello, Orchard Park\./);
   assert.doesNotMatch(html, /Good (morning|afternoon|evening), Orchard Park/);
 
-  // Server-side, "today" defaults to whichever day the snapshot flags — that's
-  // the erie fair, cruise night, concert and East Aurora market (4 of the 8
-  // fallback events); the rest live on other day tabs until picked.
-  assert.equal((html.match(/<article class="card /g) ?? []).length, 4);
-  assert.match(html, /East Aurora Farmers Market/);
+  assert.equal((html.match(/<article class="card /g) ?? []).length, 0);
 });
 
 test("schedules a Vercel Cron warm-up of the events cache", async () => {

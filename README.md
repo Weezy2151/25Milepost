@@ -19,10 +19,10 @@ Then open `http://localhost:3000`.
 
 ## How it works
 
-- `app/page.tsx` is the interactive events finder. It server-renders a bundled
-  fallback snapshot (`app/events-data.ts`, dated `SNAPSHOT_DATE`) so the page
-  never shows a blank state, then refreshes itself from `/api/events` once
-  mounted.
+- `app/page.tsx` is the interactive events finder. It server-renders a safe
+  loading state, then refreshes itself from `/api/events` once mounted. If live
+  calendars fail, it falls back to the bundled snapshot (`app/events-data.ts`,
+  dated `SNAPSHOT_DATE`) with an explicit stale-data warning.
 - `/api/weather` validates and caches Orchard Park forecasts server-side. Event
   photos use Next.js image optimization directly; the optimizer's remote-host
   allowlist is shared with the server-side URL validator, so untrusted image
@@ -162,7 +162,10 @@ posted nothing — worth revisiting when their tour season opens.
 
 This is a standard Next.js app — import the GitHub repo in the Vercel dashboard
 and it will be auto-detected and built with no custom build command. The app
-still runs without environment variables, but scheduled warm-ups require
+still runs without most environment variables, but a shared Redis/KV backend is
+required for reliable Vercel cron warm-ups, cross-instance caching, and
+`/api/health` history. Without it, the app falls back to an in-process memory
+cache isolated per serverless function. Scheduled warm-ups also require
 `CRON_SECRET`; use a long random value and set it in every Vercel environment
 where the cron should run. Vercel sends it to the cron route as a Bearer token.
 

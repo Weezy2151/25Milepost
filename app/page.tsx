@@ -237,7 +237,10 @@ function persist(key: string, value: unknown) {
 }
 
 export default function Home() {
-  const [events, setEvents] = useState<EventPick[]>(fallbackEvents);
+  // Do not render the bundled snapshot as if it were today's data. A cold
+  // function can take several seconds to answer; showing expired cards during
+  // that window is worse than a brief empty/loading state.
+  const [events, setEvents] = useState<EventPick[]>([]);
   const [loading, setLoading] = useState(true);
   /** "snapshot" until live calendars answer, so the UI can say which it is showing. */
   const [feed, setFeed] = useState<{ state: "snapshot" | "live"; ok: number; total: number }>({
@@ -311,7 +314,7 @@ export default function Home() {
         const response = await fetch("/api/events", { signal: controller.signal });
         if (!response.ok) throw new Error("refresh failed");
         const data = parseEventsPayload(await response.json());
-        if (data?.events.length) {
+        if (data) {
           setEvents(data.events);
           setUpdatedAt(data.updatedAt);
           const sources = data.sources;
@@ -323,7 +326,9 @@ export default function Home() {
           setFreshness(data.freshness ?? null);
         }
       } catch {
-        // Leave feed.state as "snapshot"; the banner explains what is on screen.
+        // If live calendars fail, show the bundled safety net with its explicit
+        // stale-data banner rather than silently leaving the loading state.
+        if (!controller.signal.aborted) setEvents(fallbackEvents);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -417,7 +422,13 @@ export default function Home() {
   const days = useMemo(() => {
     const seen = new Map<string, { dateKey: string; day: string; date: string }>();
     for (const event of events) {
-      if (event.dateKey && !seen.has(event.dateKey)) seen.set(event.dateKey, { dateKey: event.dateKey, day: event.day, date: event.date });
+      if (event.dateKey && !seen.has(event.dateKey)) {
+        // Event display strings may describe a multi-day range; day tiles must
+        // always represent the individual date they select.
+        const date = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" })
+          .format(new Date(`${event.dateKey}T12:00:00Z`));
+        seen.set(event.dateKey, { dateKey: event.dateKey, day: event.day, date });
+      }
     }
     return [...seen.values()].sort((a, b) => a.dateKey.localeCompare(b.dateKey)).slice(0, 8);
   }, [events]);
@@ -642,8 +653,8 @@ export default function Home() {
               <p className="eyebrow">Today around Orchard Park · 25-mile radius</p>
               <h1 className="display hero-title">{greeting}</h1>
               <p className="hero-sub">
-                Your local day, figured out. <b>{events.length} events</b> pulled from town calendars, libraries and community desks —
-                refreshed each morning.
+                Your local day, figured out. {loading ? <b>Loading live calendars…</b> : <><b>{events.length} events</b> pulled from town calendars, libraries and community desks —
+                refreshed each morning.</>}
               </p>
 
               <label className="search">

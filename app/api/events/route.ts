@@ -557,6 +557,9 @@ function stepOutInterest(item: ScrapedEvent) {
   return score;
 }
 
+/** Step Out includes nightlife listings that are not useful to the family guide. */
+const LATE_NIGHT_ADULT = /after party|nightclub|dj\s|adult night|21\+|18\+|cocktail|bar crawl|pub crawl|(?:9|10|11|12)(?::\d{2})?\s*PM/i;
+
 /** Stable per-event id fragment: the listing's own slug, not its position. */
 function slugOf(url: string) {
   return (url.split("?")[0].replace(/\/+$/, "").split("/").pop() ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
@@ -586,6 +589,8 @@ function parseScraped(
     if (item.end < todayKey || item.start > endKey) return [];
     const context = `${item.description} ${item.category}`;
     if (!familyFriendly(item.title, [], context, stepOut)) return [];
+    if (stepOut && LATE_NIGHT_ADULT.test(`${item.title} ${context} ${item.time}`)
+      && !/family|kids?|children|all ages|daytime/i.test(`${item.title} ${context}`)) return [];
     const interest = stepOut ? stepOutInterest(item) : 0;
     if (stepOut && (STANDING_PROMOTION.test(item.title) || interest < 0)) return [];
     if (!stepOut && MEMBER_BUSINESS.test(item.title)) return [];
@@ -629,7 +634,9 @@ function parseScraped(
   // listing later in the page. Venue diversity prevents a fair's dozens of
   // micro-events from consuming the whole day.
   scoredEvents.sort((a, b) => b.interest - a.interest || b.event.priority - a.event.priority || a.event.time.localeCompare(b.event.time));
-  const dailyLimit = parser === "stepout" ? 80 : 12;
+  // Keep the broad Step Out feed useful as a guide instead of allowing one
+  // source to turn each day into an 80-card archive.
+  const dailyLimit = parser === "stepout" ? 24 : 12;
   const perDay = new Map<string, number>();
   const perVenueDay = new Map<string, number>();
   return scoredEvents.filter(({ event }) => {
@@ -1297,18 +1304,18 @@ function featuredMajorEvents(todayKey: string, endKey: string): LiveEvent[] {
   return specific.flatMap((item, index) => {
     const activeEnd = item.endDateKey ?? item.dateKey;
     if (activeEnd < todayKey || item.dateKey > endKey) return [];
-    const dateKey = item.dateKey < todayKey ? todayKey : item.dateKey;
-    const date = item.endDateKey ? `${formatDate(dateKey)}–${formatDate(item.endDateKey)}` : formatDate(dateKey);
-    return [{
+    const firstKey = item.dateKey < todayKey ? todayKey : item.dateKey;
+    return dateKeysInRange(firstKey, activeEnd, todayKey, endKey).map((dateKey) => ({
       ...item,
+      id: item.endDateKey ? `${item.id}-${dateKey}` : item.id,
       ...place(item.venue, item.town),
       dateKey,
-      date,
+      date: item.endDateKey ? `${formatDate(dateKey)}–${formatDate(item.endDateKey)}` : formatDate(dateKey),
       day: dayLabel(dateKey, todayKey),
       today: dateKey === todayKey,
       mapUrl: mapUrl(item.venue, item.town),
       accent: ["coral", "sun", "mint", "sky", "purple"][index % 5],
-    }];
+    }));
   });
 }
 
