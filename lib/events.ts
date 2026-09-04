@@ -43,6 +43,17 @@ export const liveEventSchema = z.object({
   accent: z.string().min(1).max(32),
   image: imageUrlSchema.optional(),
   today: z.boolean().optional(),
+  /**
+   * When the event starts and ends, as minutes past local midnight.
+   *
+   * Everything this app covers sits in one timezone, so minutes-of-day says
+   * all there is to say alongside `dateKey` — no instants, no second timezone
+   * to keep in step. Null means the listing gave no readable clock ("All day",
+   * "See listing"): callers sort those last, never call them happening now,
+   * and export them as all-day calendar entries. See `lib/time.ts`.
+   */
+  startMinutes: z.number().int().min(0).max(1_439).nullable(),
+  endMinutes: z.number().int().min(0).max(1_439).nullable(),
   kind: eventKindSchema,
   setting: eventSettingSchema,
   priority: z.number().finite().min(0).max(100),
@@ -56,6 +67,16 @@ export type EventKind = z.infer<typeof eventKindSchema>;
 export type EventSetting = z.infer<typeof eventSettingSchema>;
 export type DistancePrecision = z.infer<typeof distancePrecisionSchema>;
 export type LiveEvent = z.infer<typeof liveEventSchema>;
+
+/**
+ * An event as a feed adapter builds it, before normalization.
+ *
+ * Adapters that know an exact clock time may set the minute fields; the rest
+ * leave them out and the normalize step fills them in by parsing the display
+ * time. Either way every event reaching the payload carries them.
+ */
+export type RawEvent = Omit<LiveEvent, "startMinutes" | "endMinutes">
+  & Partial<Pick<LiveEvent, "startMinutes" | "endMinutes">>;
 
 export const freshnessSchema = z.object({
   state: z.enum(["fresh", "stale", "last-good"]),

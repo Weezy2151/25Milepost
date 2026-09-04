@@ -78,3 +78,21 @@ test("formatMinutes round-trips the app's display style", () => {
   assert.equal(formatMinutes(at(12)), "12 PM");
   assert.equal(formatMinutes(at(9, 5)), "9:05 AM");
 });
+
+test("reads a start time out of every timed event the iCalendar fixture produces", async () => {
+  const { parseIcalOccurrences } = await import("../lib/ical.ts");
+  const { readFile } = await import("node:fs/promises");
+  const ics = await readFile(new URL("./fixtures/sample.ics", import.meta.url), "utf8");
+
+  const events = parseIcalOccurrences(ics, "2026-08-23", "2026-09-10");
+  assert.ok(events.length > 0, "fixture should produce events");
+
+  for (const event of events) {
+    const { startMinutes } = parseEventTime(event.time);
+    if (event.allDay) {
+      assert.equal(startMinutes, null, `all-day event should have no clock: ${event.time}`);
+    } else {
+      assert.notEqual(startMinutes, null, `timed event should yield a start: ${event.time}`);
+    }
+  }
+});

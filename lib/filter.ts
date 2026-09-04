@@ -9,14 +9,14 @@
  */
 
 import type { EventKind as ActivityKind, LiveEvent } from "./events.ts";
-import { parseStartMinutes } from "./time.ts";
+import { parseEventTime, parseStartMinutes } from "./time.ts";
 
 export type EventKind = "All activities" | ActivityKind;
 export type SettingFilter = "all" | "indoor" | "outdoor";
 export type Vibe = "all" | "outside" | "kids" | "food" | "evening" | "rain" | "drive";
 export type Sort = "recommended" | "closest";
 
-type OptionalLiveFields = "dateKey" | "kind" | "setting" | "priority" | "lat" | "lon" | "distancePrecision";
+type OptionalLiveFields = "dateKey" | "kind" | "setting" | "priority" | "lat" | "lon" | "distancePrecision" | "startMinutes" | "endMinutes";
 /** Fallback snapshots predate the normalized live contract, so enrichment fields remain optional only here. */
 export type EventPick = Omit<LiveEvent, OptionalLiveFields> & Partial<Pick<LiveEvent, OptionalLiveFields>>;
 
@@ -73,6 +73,20 @@ function withoutTown(value: string, town: string) {
   if (!town) return value;
   const escaped = town.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return value.replace(new RegExp(escaped, "gi"), " ");
+}
+
+/**
+ * When an event starts and ends, in minutes past local midnight.
+ *
+ * Live events carry the fields the API normalized; the bundled snapshot
+ * predates them, so its display time is read on the spot rather than leaving
+ * the safety net unsorted.
+ */
+export function eventMinutes(event: EventPick) {
+  if (event.startMinutes !== undefined) {
+    return { startMinutes: event.startMinutes, endMinutes: event.endMinutes ?? null };
+  }
+  return parseEventTime(event.time);
 }
 
 /** An event paired with the lowercased blob the search box and vibe rules read. */

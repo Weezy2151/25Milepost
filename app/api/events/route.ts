@@ -3,7 +3,8 @@ import { after } from "next/server";
 import { acquireCacheLock, cacheBackendName, getCachedEntry, setCachedData } from "../../../db/cache";
 import { distanceFromOrigin, extractTown, ORIGIN } from "../../../lib/geo";
 import { describe, resolveImages } from "../../../lib/enrich";
-import { eventsPayloadSchema, liveEventSchema, type EventKind, type EventsPayload, type EventSetting, type LiveEvent, type SourceHealth } from "../../../lib/events";
+import { eventsPayloadSchema, liveEventSchema, type EventKind, type EventsPayload, type EventSetting, type LiveEvent, type RawEvent, type SourceHealth } from "../../../lib/events";
+import { parseEventTime } from "../../../lib/time";
 import { EVENTS_HEALTH_KEY, healthSnapshotSchema, type HealthSnapshot } from "../../../lib/health";
 import { parseIcalOccurrences } from "../../../lib/ical";
 import { assertSafePublicUrl, EVENT_IMAGE_HOSTS, fetchPublicText } from "../../../lib/safe-fetch";
@@ -242,7 +243,7 @@ async function fetchWithTimeout(url: string, headers: HeadersInit, timeoutMs = 4
   return fetchPublicText(url, { headers, timeoutMs, maxBytes });
 }
 
-function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[] {
+function parseLibrary(xml: string, todayKey: string, endKey: string): RawEvent[] {
   return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].flatMap((match, index) => {
     const item = match[1];
     const dateKey = decode(textBetween(item, "libcal:date"));
@@ -335,7 +336,7 @@ function parseTribe(
   todayKey: string,
   endKey: string,
   regional: boolean,
-): LiveEvent[] {
+): RawEvent[] {
   let parsed: { events?: TribeEvent[] };
   try {
     parsed = JSON.parse(json);
@@ -428,7 +429,7 @@ function ticketmasterCost(ranges: TicketmasterEvent["priceRanges"]) {
  * ticketed events; the municipal and community calendars never listed them.
  * Optional — without TICKETMASTER_API_KEY the source is simply skipped.
  */
-function parseTicketmaster(json: string, todayKey: string, endKey: string): LiveEvent[] {
+function parseTicketmaster(json: string, todayKey: string, endKey: string): RawEvent[] {
   let parsed: { _embedded?: { events?: TicketmasterEvent[] } };
   try {
     parsed = JSON.parse(json);
@@ -492,7 +493,7 @@ function place(venue: string, town: string) {
   return { distance, lat: coords.lat, lon: coords.lon, distancePrecision: precision };
 }
 
-function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city", todayKey: string, endKey: string): LiveEvent[] {
+function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city", todayKey: string, endKey: string): RawEvent[] {
   return parseIcalOccurrences(ics, todayKey, endKey, ZONE).flatMap((item, index) => {
     const { dateKey, title } = item;
     const description = cleanHtml(item.description);
@@ -582,10 +583,10 @@ function parseScraped(
   defaultTown: string,
   todayKey: string,
   endKey: string,
-): LiveEvent[] {
+): RawEvent[] {
   const stepOut = parser === "stepout";
 
-  const scoredEvents = items.flatMap((item, index): Array<{ event: LiveEvent; interest: number }> => {
+  const scoredEvents = items.flatMap((item, index): Array<{ event: RawEvent; interest: number }> => {
     if (item.end < todayKey || item.start > endKey) return [];
     const context = `${item.description} ${item.category}`;
     if (!familyFriendly(item.title, [], context, stepOut)) return [];
@@ -1190,8 +1191,8 @@ type SpecificFeatured = {
   priority: number;
 };
 
-function generateDynamicRecurringEvents(todayKey: string, endKey: string): LiveEvent[] {
-  const events: LiveEvent[] = [];
+function generateDynamicRecurringEvents(todayKey: string, endKey: string): RawEvent[] {
+  const events: RawEvent[] = [];
   let current = todayKey;
   let dayOffset = 0;
 
@@ -1256,7 +1257,7 @@ const FEATURED_REVIEWED_THROUGH = "2026-08-31";
  * exists. Only add something here when no feed carries it and missing it would
  * be embarrassing.
  */
-function featuredMajorEvents(todayKey: string, endKey: string): LiveEvent[] {
+function featuredMajorEvents(todayKey: string, endKey: string): RawEvent[] {
   if (todayKey > FEATURED_REVIEWED_THROUGH) {
     console.warn(`[events] featured list not reviewed since ${FEATURED_REVIEWED_THROUGH}; entries may be stale`);
   }
@@ -1355,7 +1356,7 @@ function titleWords(title: string) {
  * template is the fallback: when a real feed carries the event that day, the
  * live copy wins, because it has the current time, cost and image.
  */
-function dropSupersededRecurring(recurring: LiveEvent[], live: LiveEvent[]) {
+function dropSupersededRecurring(recurring: RawEvent[], live: RawEvent[]) {
   const liveByDate = new Map<string, Set<string>[]>();
   for (const event of live) {
     const bucket = liveByDate.get(event.dateKey) ?? [];
@@ -1654,7 +1655,7 @@ async function buildEventsPayload(): Promise<EventsPayload> {
   ];
 
   const settled = await Promise.allSettled(requests);
-  const events: LiveEvent[] = [];
+  const events: RawEvent[] = [];
   const sources = settled.map((result, index) => {
     const name = requestNames[index];
     if (result.status === "rejected") {
@@ -1712,7 +1713,16 @@ async function buildEventsPayload(): Promise<EventsPayload> {
   const allEvents = [...major, ...recurring, ...events];
 
   const validEvents = allEvents.flatMap((event) => {
-    const parsed = liveEventSchema.safeParse({ ...event, image: safeImage(event.image) });
+    // One place where every event — live, recurring or featured — gets real
+    // start and end minutes. Adapters that already know the exact clock keep
+    // what they set; the rest are read off the display time.
+    const times = parseEventTime(event.time);
+    const parsed = liveEventSchema.safeParse({
+      ...event,
+      image: safeImage(event.image),
+      startMinutes: event.startMinutes ?? times.startMinutes,
+      endMinutes: event.endMinutes ?? times.endMinutes,
+    });
     if (!parsed.success) {
       console.warn(`[events] dropped invalid event: ${event.title}`);
       return [];
