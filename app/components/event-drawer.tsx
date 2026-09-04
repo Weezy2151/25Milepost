@@ -4,7 +4,7 @@ import Image from "next/image";
 import type { RefObject } from "react";
 
 import { isFree, settingLabel, type EventPick } from "../../lib/filter";
-import { IconBookmark, IconExternal, IconPin, IconTicket, IconX } from "./icons";
+import { IconBookmark, IconExternal, IconPin, IconShare, IconTicket, IconX } from "./icons";
 
 /** The slide-over showing one event in full. */
 export function EventDrawer({
@@ -15,6 +15,7 @@ export function EventDrawer({
   onClose,
   onToggleSave,
   onTogglePlan,
+  onCopyLink,
 }: {
   selected: EventPick;
   isSaved: boolean;
@@ -23,6 +24,7 @@ export function EventDrawer({
   onClose: () => void;
   onToggleSave: (id: string) => void;
   onTogglePlan: (event: EventPick) => void;
+  onCopyLink: (event: EventPick) => void;
 }) {
   return (
       <div className="scrim">
@@ -97,6 +99,10 @@ export function EventDrawer({
                 >
                   <IconBookmark style={{ width: 15, height: 15 }} />
                   {isSaved ? "Saved" : "Save for later"}
+                </button>
+                <button type="button" className="btn-ghost" onClick={() => onCopyLink(selected)}>
+                  <IconShare style={{ width: 15, height: 15 }} />
+                  Copy link
                 </button>
               </div>
             </div>

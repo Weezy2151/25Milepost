@@ -245,7 +245,9 @@ export type ViewAction =
   /** Clear every filter but stay on the selected day. */
   | { type: "clearFilters" }
   /** Clear the filters and go back to today. */
-  | { type: "resetAll" };
+  | { type: "resetAll" }
+  /** Adopt a whole view at once — how a shared link seeds the page. */
+  | { type: "replace"; value: ViewState };
 
 export function viewReducer(state: ViewState, action: ViewAction): ViewState {
   switch (action.type) {
@@ -255,6 +257,8 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       return { ...DEFAULT_VIEW, day: state.day };
     case "resetAll":
       return DEFAULT_VIEW;
+    case "replace":
+      return action.value;
     default: {
       // Returning the same object when nothing moved keeps re-selecting the
       // current option from re-running the filter pass.

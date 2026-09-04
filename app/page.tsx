@@ -5,6 +5,7 @@ import { parseEventsPayload, parseStoredIds, parseStoredPlan, parseWeatherPayloa
 import type { Freshness } from "../lib/events";
 import type { Weather } from "../lib/weather";
 import { eventStatus, localDateKey, nowMinutes } from "../lib/time";
+import { overlayFromHash, overlayToHash, viewFromParams, viewToUrl, type Overlay } from "../lib/url";
 import { fallbackEvents } from "./events-data";
 import {
   activeCriteria,
@@ -75,6 +76,49 @@ export default function Home() {
   const [selected, setSelected] = useState<EventPick | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+
+  /**
+   * Overlays are opened by pushing a fragment and closed by stepping back, so
+   * the phone's Back button closes the drawer instead of leaving the site.
+   *
+   * `ownedHistory` counts the entries this page pushed. Someone who arrived on
+   * a link straight to an event has none, and closing must not send them off
+   * the site, so that case rewrites the URL in place instead.
+   */
+  const ownedHistory = useRef(0);
+
+  const openOverlay = useCallback((overlay: Overlay) => {
+    if (typeof window !== "undefined") {
+      window.history.pushState(null, "", overlayToHash(overlay) || window.location.pathname + window.location.search);
+      ownedHistory.current += 1;
+    }
+    if (overlay?.kind === "my-day") setPlanOpen(true);
+    else if (overlay?.kind === "filters") setSheetOpen(true);
+  }, []);
+
+  const openEvent = useCallback((event: EventPick) => {
+    if (typeof window !== "undefined") {
+      window.history.pushState(null, "", overlayToHash({ kind: "event", id: event.id }));
+      ownedHistory.current += 1;
+    }
+    setSelected(event);
+  }, []);
+
+  /** Close whatever is open: back if we put it in the history, in place if not. */
+  const closeOverlay = useCallback(() => {
+    if (typeof window !== "undefined" && ownedHistory.current > 0) {
+      // popstate does the closing, so the URL and the drawer never disagree.
+      window.history.back();
+      return;
+    }
+    setSelected(null);
+    setPlanOpen(false);
+    setSheetOpen(false);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }, []);
+
 
   const [greeting, setGreeting] = useState("Hello, Orchard Park.");
   const [theme, setTheme] = useState<"light" | "dark" | null>(null);
@@ -160,6 +204,58 @@ export default function Home() {
   useEffect(() => {
     if (theme) document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
+
+  /* ---- the view in the URL ---- */
+
+  /**
+   * Adopt whatever the URL asks for, and keep it in step from then on.
+   *
+   * The URL is read after mount rather than through useSearchParams, which
+   * would force this route to be client-rendered up to a Suspense boundary and
+   * cost the prerendered first paint. Native history calls integrate with the
+   * router, so the address bar, the Back button and this page stay in
+   * agreement.
+   */
+  const [hydratedUrl, setHydratedUrl] = useState(false);
+  /** An event linked to directly cannot open until the listings have loaded. */
+  const [pendingEventId, setPendingEventId] = useState<string | null>(null);
+
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    const readUrl = () => {
+      dispatch({ type: "replace", value: viewFromParams(new URLSearchParams(window.location.search)) });
+      const overlay = overlayFromHash(window.location.hash);
+      setPlanOpen(overlay?.kind === "my-day");
+      setSheetOpen(overlay?.kind === "filters");
+      if (overlay?.kind === "event") setPendingEventId(overlay.id);
+      else {
+        setPendingEventId(null);
+        setSelected(null);
+      }
+    };
+
+    readUrl();
+    setHydratedUrl(true);
+
+    const onPopState = () => {
+      // Stepping back past an overlay we pushed hands the entry back.
+      ownedHistory.current = Math.max(0, ownedHistory.current - 1);
+      readUrl();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  // Filters and the day rewrite the URL in place: a shared link should carry
+  // what is on screen, without every keystroke becoming a history entry.
+  useEffect(() => {
+    if (!hydratedUrl) return;
+    const next = viewToUrl(view, window.location.pathname, window.location.hash);
+    if (next !== window.location.pathname + window.location.search + window.location.hash) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [view, hydratedUrl]);
 
   /**
    * Local time as minutes past midnight, refreshed each minute.
@@ -275,6 +371,14 @@ export default function Home() {
 
   const [showEarlier, setShowEarlier] = useState(false);
 
+  // A link straight to an event arrives before the listings do.
+  useEffect(() => {
+    if (!pendingEventId) return;
+    const event = eventById.get(pendingEventId);
+    /* eslint-disable-next-line react-hooks/set-state-in-effect */
+    if (event) setSelected(event);
+  }, [pendingEventId, eventById]);
+
   /**
    * What the rest of the week holds for the same filters. The list is one day
    * at a time, so without this a search matching nothing today reads as though
@@ -357,6 +461,17 @@ export default function Home() {
     setNotice("My Day cleared.");
   };
 
+  /** A link to one event, as the drawer's Copy link button hands it out. */
+  const copyEventLink = async (event: EventPick) => {
+    const url = `${window.location.origin}${window.location.pathname}${window.location.search}${overlayToHash({ kind: "event", id: event.id })}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setNotice("Link to this event copied.");
+    } catch {
+      setNotice("Could not copy — try the address bar instead.");
+    }
+  };
+
   const share = async () => {
     try {
       if (navigator.share) {
@@ -402,9 +517,9 @@ export default function Home() {
     }
   };
 
-  const closeDetails = useCallback(() => setSelected(null), []);
-  const closePlan = useCallback(() => setPlanOpen(false), []);
-  const closeSheet = useCallback(() => setSheetOpen(false), []);
+  const closeDetails = closeOverlay;
+  const closePlan = closeOverlay;
+  const closeSheet = closeOverlay;
   const detailRef = useModal(selected !== null, closeDetails);
   const planRef = useModal(planOpen, closePlan);
   const sheetRef = useModal(sheetOpen, closeSheet);
@@ -460,7 +575,7 @@ export default function Home() {
             <button
               type="button"
               className={planCount ? "icon-btn on topbar-myday" : "icon-btn topbar-myday"}
-              onClick={() => setPlanOpen(true)}
+              onClick={() => openOverlay({ kind: "my-day" })}
             >
               <IconRoute />
               My Day
@@ -509,11 +624,11 @@ export default function Home() {
           savedCount={saved.length}
           resultCount={filtered.length}
           viewingToday={viewingToday}
-          onOpenSheet={() => setSheetOpen(true)}
+          onOpenSheet={() => openOverlay({ kind: "filters" })}
           onClearAll={clearAll}
         />
         {/* ------------------------------------------------------ spotlight */}
-        {showSpotlight && <Spotlight spotlight={spotlight} onOpen={setSelected} />}
+        {showSpotlight && <Spotlight spotlight={spotlight} onOpen={openEvent} />}
         {/* -------------------------------------------------------- results */}
         <section className="wrap section" id="results" tabIndex={-1} aria-label={`Events on ${activeDayMeta?.date ?? "the selected day"}`}>
           <div className="section-head">
@@ -542,7 +657,7 @@ export default function Home() {
                       nowMinutes={viewingToday ? clock : null}
                       onToggleSave={toggleSave}
                       onTogglePlan={togglePlan}
-                      onOpen={setSelected}
+                      onOpen={openEvent}
                     />
                   ))}
                 </div>
@@ -567,7 +682,7 @@ export default function Home() {
                           nowMinutes={viewingToday ? clock : null}
                           onToggleSave={toggleSave}
                           onTogglePlan={togglePlan}
-                          onOpen={setSelected}
+                          onOpen={openEvent}
                         />
                       ))}
                     </div>
@@ -603,7 +718,7 @@ export default function Home() {
             <OtherDays
               groups={otherDays.groups}
               total={otherDays.total}
-              onOpen={setSelected}
+              onOpen={openEvent}
               onJump={(dateKey) => dispatch({ type: "day", value: dateKey })}
             />
           )}
@@ -640,6 +755,7 @@ export default function Home() {
           onClose={closeDetails}
           onToggleSave={toggleSave}
           onTogglePlan={togglePlan}
+          onCopyLink={copyEventLink}
         />
       )}
       {/* --------------------------------------------------- My Day drawer */}
@@ -669,7 +785,7 @@ export default function Home() {
           onClearAll={clearAll}
         />
       )}
-      <button type="button" className="fab" onClick={() => setPlanOpen(true)} data-modal-background>
+      <button type="button" className="fab" onClick={() => openOverlay({ kind: "my-day" })} data-modal-background>
         <IconRoute />
         My Day
         {planCount > 0 && <span className="pill-count">{planCount}</span>}
