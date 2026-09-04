@@ -51,6 +51,10 @@ Then open `http://localhost:3000`.
   six hours past that window, so an expired payload is returned immediately while
   one leased rebuild runs behind the response, and a copy of the last payload that ever
   built successfully is kept for a week as a floor. See "Caching on Vercel".
+- `app/manifest.ts` and `public/sw.js` make the guide installable and readable
+  without a signal. The worker serves navigations and the events payload
+  network-first, falling back to the last copy it stored, and content-hashed
+  build output cache-first. Calendar downloads are never served from a cache.
 - `/api/calendar/[id]` and `/api/calendar/my-day?id=…` hand out iCalendar
   files for one event or a whole itinerary, written by `lib/ics-write.ts` and
   served from the cached payload — a download never triggers a feed fetch.

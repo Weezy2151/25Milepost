@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ErrorBoundary } from "./error-boundary";
+import { ServiceWorker } from "./components/service-worker";
 import { siteUrl } from "../lib/site";
 
 const title = "The 25-Mile Post | Family Things To Do Near Orchard Park";
@@ -32,6 +33,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       </head>
       <body>
         <ErrorBoundary>{children}</ErrorBoundary>
+        <ServiceWorker />
       </body>
     </html>
   );
