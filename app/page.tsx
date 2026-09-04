@@ -1,194 +1,33 @@
 "use client";
 
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import Image from "next/image";
+import { useCallback, useDeferredValue, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { parseEventsPayload, parseStoredIds, parseStoredPlan, parseWeatherPayload, type StoredPlanItem } from "../lib/client-data";
 import type { Freshness } from "../lib/events";
-import type { DayForecast, Weather } from "../lib/weather";
-import { fallbackEvents, SNAPSHOT_DATE } from "./events-data";
+import type { Weather } from "../lib/weather";
+import { fallbackEvents } from "./events-data";
 import {
   activeCriteria,
   buildSearchIndex,
   DEFAULT_VIEW,
-  driveMinutes,
   filterEvents,
   isFree,
-  KIND_OPTIONS,
-  MOODS,
-  settingLabel,
   viewReducer,
-  type EventKind,
   type EventPick,
   type FilterCriteria,
-  type SettingFilter,
-  type Sort,
 } from "../lib/filter";
-import { FilterMenu } from "./components/filter-menu";
-import { IconBookmark, IconCheck, IconChevron, IconClock, IconCopy, IconExternal, IconMoon, IconPin, IconPlus, IconRoute, IconSearch, IconShare, IconSparkle, IconSun, IconTicket, IconX } from "./components/icons";
+import { DayPicker } from "./components/day-picker";
+import { EventCard } from "./components/event-card";
+import { EventDrawer } from "./components/event-drawer";
+import { FilterBar } from "./components/filter-bar";
+import { FilterSheet } from "./components/filter-sheet";
+import { Hero } from "./components/hero";
+import { MyDayDrawer } from "./components/my-day-drawer";
+import { Sources } from "./components/sources";
+import { Spotlight } from "./components/spotlight";
+import { IconMoon, IconRoute, IconSearch, IconShare, IconSun, IconX } from "./components/icons";
 import { useModal } from "./components/use-modal";
 
-/* ------------------------------------------------------------- event card */
-
-const EventCard = memo(function EventCard({
-  event,
-  isSaved,
-  inPlan,
-  forecast,
-  onToggleSave,
-  onTogglePlan,
-  onOpen,
-}: {
-  event: EventPick;
-  isSaved: boolean;
-  inPlan: boolean;
-  forecast: DayForecast | null;
-  onToggleSave: (id: string) => void;
-  onTogglePlan: (event: EventPick) => void;
-  onOpen: (event: EventPick) => void;
-}) {
-  const initials = event.town === "Orchard Park" ? "OP" : event.town.slice(0, 2).toUpperCase();
-  // Aggregated feeds occasionally repeat a tag; de-dupe so React keys stay unique.
-  const tags = [...new Set(event.tags)].slice(0, 3);
-
-  return (
-    <article className={`card accent-${event.accent}`} id={event.id}>
-      <button type="button" className="card-media" onClick={() => onOpen(event)} aria-label={`Open details for ${event.title}`}>
-        {event.image ? (
-          <Image
-            src={event.image}
-            alt=""
-            fill
-            quality={70}
-            sizes="(max-width: 760px) calc(100vw - 32px), (max-width: 891px) calc((100vw - 72px) / 2), (max-width: 1175px) calc((100vw - 88px) / 3), 294px"
-          />
-        ) : (
-          <span className="card-pattern">
-            <em>{event.tags[0]}</em>
-            <b>{initials}</b>
-          </span>
-        )}
-        <span className="card-flags">
-          <span className={event.today ? "flag today" : "flag"}>{event.day}</span>
-          <span className="flag" title={event.distancePrecision === "town" ? `Approximate — measured from the centre of ${event.town}` : undefined}>
-            {event.distancePrecision === "town" || event.distancePrecision === "region" ? "~" : ""}
-            {event.distance} mi · ~{driveMinutes(event.distance)} min
-          </span>
-        </span>
-      </button>
-
-      <div className="card-body">
-        <p className="card-when">
-          <IconClock />
-          {event.date} <span>·</span> {event.time}
-        </p>
-        <h3>
-          <button type="button" className="card-title" onClick={() => onOpen(event)}>
-            {event.title}
-          </button>
-        </h3>
-        <p className="card-where">
-          <IconPin />
-          <span>
-            {event.venue} · {event.town}
-          </span>
-        </p>
-        <p className="card-desc">{event.description}</p>
-        <div className="card-tags">
-          {forecast && (
-            <span className={forecast.rain >= 40 ? "tag weather wet" : "tag weather"} title={`${forecast.label} on the day of this event`}>
-              <i aria-hidden="true">{weatherEmoji(forecast.code)}</i> {forecast.high}° · {forecast.rain}% rain
-            </span>
-          )}
-          <span className="tag setting">{settingLabel(event.setting)}</span>
-          {tags.map((tag) => (
-            <span key={tag} className="tag">
-              {tag}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      <div className="card-foot">
-        <div className="card-cost">
-          <b className={isFree(event.cost) ? "free" : ""} title={event.cost}>
-            {event.cost}
-          </b>
-          <small>via {event.source}</small>
-        </div>
-        <div className="card-acts">
-          <button
-            type="button"
-            className={inPlan ? "icon-btn on" : "icon-btn"}
-            onClick={() => onTogglePlan(event)}
-            aria-pressed={inPlan}
-            aria-label={inPlan ? `Remove ${event.title} from My Day` : `Add ${event.title} to My Day`}
-            title={inPlan ? "Remove from My Day" : "Add to My Day"}
-          >
-            {inPlan ? <IconCheck /> : <IconPlus />}
-          </button>
-          <button
-            type="button"
-            className={isSaved ? "icon-btn on" : "icon-btn"}
-            onClick={() => onToggleSave(event.id)}
-            aria-pressed={isSaved}
-            aria-label={isSaved ? `Remove ${event.title} from saved events` : `Save ${event.title} for later`}
-            title={isSaved ? "Remove from saved" : "Save for later"}
-          >
-            <IconBookmark />
-          </button>
-          <a className="icon-btn" href={event.mapUrl} target="_blank" rel="noreferrer" aria-label={`Directions to ${event.venue}`} title={`Directions to ${event.venue}`}>
-            <IconPin />
-          </a>
-        </div>
-      </div>
-    </article>
-  );
-});
-
 /* -------------------------------------------------------------- home page */
-
-function weatherEmoji(code: number) {
-  if (code === 0) return "☀️";
-  if (code <= 3) return "⛅";
-  if (code <= 48) return "🌫️";
-  if (code <= 67 || (code >= 80 && code <= 82)) return "🌧️";
-  if (code <= 77) return "❄️";
-  if (code >= 95) return "⛈️";
-  return "🌤️";
-}
-
-/**
- * Calendars the API actually pulls on each refresh — keep in step with
- * LIBRARY_FEEDS / TRIBE_FEEDS / ICS_FEEDS in app/api/events/route.ts.
- */
-const FETCHED_SOURCES: Array<[string, string]> = [
-  ["Buffalo & Erie County Public Library", "https://www.buffalolib.org/"],
-  ["EverythingOP", "https://everythingop.com/events/"],
-  ["Orchard Park Chamber", "https://orchardparkchamber.org/events/"],
-  ["Buffalo Rising", "https://www.buffalorising.com/events/"],
-  ["Visit Buffalo", "https://visitbuffalo.com/events/"],
-  ["Town of Orchard Park", "https://www.orchardparkny.gov/events/"],
-  ["Town of Evans", "https://townofevansny.gov/events/"],
-  ["Southtowns Regional Chamber", "https://southtownsregionalchamber.org/news-events/"],
-  ["Explore & More", "https://exploreandmore.org/events/"],
-  ["Erie County Parks", "https://www3.erie.gov/parks/events"],
-  ["Step Out Buffalo", "https://stepoutbuffalo.com/all-events/"],
-  ["East Aurora Chamber", "https://business.eanycc.com/eventcalendar"],
-];
-
-/**
- * Publishers with no usable feed. These are read by a person and turned into
- * the curated entries in the API route, so they are listed separately rather
- * than implying the app scrapes them.
- */
-const MANUAL_SOURCES: Array<[string, string]> = [
-  ["Visit Buffalo Niagara", "https://visitbuffalo.com/events/"],
-  ["Village of Hamburg", "https://villageofhamburgny.gov/events"],
-  ["Village of East Aurora", "https://www.eastaurora.gov/news-updates-events/calendar-of-events"],
-  ["WNY Family Magazine", "https://www.wnyfamilymagazine.com/search/event/calendar-of-events/index.html"],
-  ["Orchard Park Bee", "https://www.orchardparkbee.com/"],
-  ["Hamburg Sun", "https://www.sun-news.com/"],
-];
 
 const SAVED_KEY = "twenty-five-mile-post-clippings";
 const PLAN_KEY = "twenty-five-mile-post-myday";
@@ -556,347 +395,47 @@ export default function Home() {
 
       <main id="top" data-modal-background>
         {/* ------------------------------------------------------------ hero */}
-        <section className="hero">
-          <div className="wrap hero-grid">
-            <div>
-              <p className="eyebrow">Today around Orchard Park · 25-mile radius</p>
-              <h1 className="display hero-title">{greeting}</h1>
-              <p className="hero-sub">
-                Your local day, figured out. {loading ? <b>Loading live calendars…</b> : <><b>{events.length} events</b> pulled from town calendars, libraries and community desks —
-                refreshed each morning.</>}
-              </p>
-
-              <label className="search">
-                <IconSearch />
-                <input
-                  ref={searchRef}
-                  value={query}
-                  onChange={(event) => dispatch({ type: "query", value: event.target.value })}
-                  placeholder="Search farmers markets, live music, storytime…"
-                  aria-label="Search events"
-                />
-                {query && (
-                  <button type="button" className="search-clear" onClick={() => dispatch({ type: "query", value: "" })} aria-label="Clear search">
-                    <IconX />
-                  </button>
-                )}
-              </label>
-
-              <div className="moods" role="group" aria-label="Filter by mood">
-                {MOODS.map((mood) => (
-                  <button
-                    key={mood.id}
-                    type="button"
-                    className="mood"
-                    aria-pressed={vibe === mood.id}
-                    onClick={() => dispatch({ type: "vibe", value: vibe === mood.id ? "all" : mood.id })}
-                  >
-                    <i aria-hidden="true">{mood.icon}</i>
-                    {mood.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="aside-stack">
-              <div className="wcard" aria-busy={weatherLoading}>
-                <div className="wcard-head">
-                  <span className={weatherLoading ? "live-dot busy" : "live-dot"} />
-                  Live Orchard Park weather
-                </div>
-                {weather ? (
-                  <>
-                    <div className="wcard-temp">
-                      <b>{weather.now}°</b>
-                      <span>{weather.label}</span>
-                    </div>
-                    <div className="wcard-rows">
-                      {/* The temperature above is live; these two follow whichever
-                          day the picker is on, so they match the list below. */}
-                      <div className="wcard-row">
-                        <span>{viewingToday ? "Today’s high" : `High ${activeDayMeta?.day === "TOMORROW" ? "tomorrow" : (activeDayMeta?.date ?? "")}`}</span>
-                        <b>{dayForecast ? `${dayForecast.high}°` : "—"}</b>
-                      </div>
-                      <div className="wcard-row">
-                        <span>Chance of rain</span>
-                        <b className={rainLikely ? "warn-text" : undefined}>{dayForecast ? `${dayForecast.rain}%` : "—"}</b>
-                      </div>
-                      <div className="wcard-row">
-                        <span>Calendars checked</span>
-                        <b className={feed.state === "live" && feed.ok < feed.total ? "warn-text" : undefined}>
-                          {feed.state === "live" ? `${feed.ok} of ${feed.total}` : loading ? "Checking…" : "Unreachable"}
-                        </b>
-                      </div>
-                      <div className="wcard-row">
-                        <span>Events updated</span>
-                        <b>
-                          {updatedAt
-                            ? `${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${
-                                freshness?.state === "stale" ? " · refreshing" : ""
-                              }`
-                            : loading
-                              ? "Loading…"
-                              : "Snapshot"}
-                        </b>
-                      </div>
-                    </div>
-                  </>
-                ) : weatherLoading ? (
-                  <div className="weather-skeleton" aria-hidden="true">
-                    <span />
-                    <b />
-                    <span />
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                ) : (
-                  <div className="wcard-temp">
-                    <span>Forecast unavailable — check before outdoor plans.</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="glance">
-                <div className="glance-cell">
-                  <b>{todayCount}</b>
-                  <span>Today</span>
-                </div>
-                <div className="glance-cell">
-                  <b>{freeToday}</b>
-                  <span>Free</span>
-                </div>
-                <div className="glance-cell">
-                  <b>{closeToday}</b>
-                  <span>Under 5 mi</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {!loading && feed.state === "snapshot" && (
-            <div className="wrap">
-              <div className="advisory warn" role="status">
-                <p>
-                  ⚠️ <strong>Live calendars are unreachable right now.</strong> You are seeing a saved snapshot from{" "}
-                  {new Date(`${SNAPSHOT_DATE}T12:00:00`).toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })},
-                  so dates and times below may have passed.
-                </p>
-                <button type="button" onClick={() => window.location.reload()}>
-                  Try again
-                </button>
-              </div>
-            </div>
-          )}
-
-          {freshness?.state === "last-good" && (
-            <div className="wrap">
-              <div className="advisory warn" role="status">
-                <p>
-                  ⚠️ <strong>Every calendar failed to answer this morning.</strong> These are the last listings that came
-                  through, collected{" "}
-                  {new Date(`${freshness.builtFor}T12:00:00`).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
-                  , so check times before you go.
-                </p>
-                <button type="button" onClick={() => window.location.reload()}>
-                  Try again
-                </button>
-              </div>
-            </div>
-          )}
-
-          {feed.state === "live" && feed.ok < feed.total && (
-            <div className="wrap">
-              <div className="advisory warn" role="status">
-                <p>
-                  ⚠️ <strong>
-                    {feed.total - feed.ok} of {feed.total} calendars didn&rsquo;t respond.
-                  </strong>{" "}
-                  Everything below is current, but a few towns may be missing events today.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {rainLikely && (
-            <div className="wrap">
-              <div className="advisory">
-                <p>
-                  🌧️{" "}
-                  <strong>
-                    {dayForecast!.rain}% chance of rain{" "}
-                    {viewingToday ? "today" : `on ${activeDayMeta?.date ?? "that day"}`}.
-                  </strong>{" "}
-                  Good {viewingToday ? "day" : "one"} for libraries, museums, play cafés and indoor games.
-                </p>
-                <button
-                  type="button"
-                  className={setting === "indoor" ? "on" : ""}
-                  onClick={() => dispatch({ type: "setting", value: setting === "indoor" ? "all" : "indoor" })}
-                >
-                  {setting === "indoor" ? "Showing indoor only" : "Show indoor picks"}
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
-
+        <Hero
+          greeting={greeting}
+          loading={loading}
+          eventCount={events.length}
+          query={query}
+          vibe={vibe}
+          setting={setting}
+          dispatch={dispatch}
+          searchRef={searchRef}
+          weather={weather}
+          weatherLoading={weatherLoading}
+          feed={feed}
+          freshness={freshness}
+          updatedAt={updatedAt}
+          dayForecast={dayForecast}
+          activeDayMeta={activeDayMeta}
+          viewingToday={viewingToday}
+          rainLikely={rainLikely}
+          todayCount={todayCount}
+          freeToday={freeToday}
+          closeToday={closeToday}
+        />
         {/* ------------------------------------------------------- day picker */}
-        <section className="wrap daypicker-wrap" aria-label="Choose a day">
-          <p className="daypicker-label">Pick a day this week</p>
-          <div className="daypicker" role="group" aria-label="Day of the week">
-            {days.map((day) => (
-              <button
-                key={day.dateKey}
-                type="button"
-                className="daypicker-btn"
-                aria-pressed={day.dateKey === activeDay}
-                onClick={() => dispatch({ type: "day", value: day.dateKey })}
-              >
-                <b>{day.day === "TODAY" || day.day === "TOMORROW" ? day.day : day.day.slice(0, 3)}</b>
-                <span>{day.date.replace(/^[A-Za-z]+,\s*/, "")}</span>
-                {/* Picking a day is a weather decision as much as a calendar one. */}
-                {dayWeather.get(day.dateKey) && (
-                  <span className="daypicker-sky">
-                    <i aria-hidden="true">{weatherEmoji(dayWeather.get(day.dateKey)!.code)}</i>{" "}
-                    {dayWeather.get(day.dateKey)!.high}°
-                    <span className="sr-only">
-                      , {dayWeather.get(day.dateKey)!.label}, {dayWeather.get(day.dateKey)!.rain}% chance of rain
-                    </span>
-                  </span>
-                )}
-                <em>{dayCounts.get(day.dateKey) ?? 0}</em>
-              </button>
-            ))}
-          </div>
-        </section>
-
+        <DayPicker
+          days={days}
+          activeDay={activeDay}
+          dayCounts={dayCounts}
+          dayWeather={dayWeather}
+          onSelect={(dateKey) => dispatch({ type: "day", value: dateKey })}
+        />
         {/* ----------------------------------------------------- filter bar */}
-        <div className="filterbar">
-          <div className="wrap filterbar-inner">
-            <button
-              type="button"
-              className={activeFilters.length ? "fmenu-btn on filters-mobile" : "fmenu-btn filters-mobile"}
-              onClick={() => setSheetOpen(true)}
-            >
-              Filters
-              {activeFilters.length > 0 && <span className="pill-count">{activeFilters.length}</span>}
-              <IconChevron />
-            </button>
-
-            <div className="filters-desktop">
-            <FilterMenu
-              label="Drive time"
-              defaultValue="any"
-              selected={maxDistance === null ? "any" : String(maxDistance)}
-              options={[
-                { value: "any", label: `Up to 25 mi · ~${driveMinutes(25)} min` },
-                { value: "5", label: `Up to 5 mi · ~${driveMinutes(5)} min` },
-                { value: "10", label: `Up to 10 mi · ~${driveMinutes(10)} min` },
-                { value: "15", label: `Up to 15 mi · ~${driveMinutes(15)} min` },
-              ]}
-              onSelect={(value) => dispatch({ type: "maxDistance", value: value === "any" ? null : Number(value) })}
-            />
-            <FilterMenu
-              label="Activity"
-              defaultValue="All activities"
-              selected={kind}
-              options={KIND_OPTIONS.map((option) => ({ value: option, label: option }))}
-              onSelect={(value) => dispatch({ type: "kind", value: value as EventKind })}
-            />
-            <FilterMenu
-              label="Setting"
-              defaultValue="all"
-              selected={setting}
-              options={[
-                { value: "all", label: "Indoor + outdoor" },
-                { value: "indoor", label: "Indoor" },
-                { value: "outdoor", label: "Outdoor" },
-              ]}
-              onSelect={(value) => dispatch({ type: "setting", value: value as SettingFilter })}
-            />
-            </div>
-
-            <span className="filter-spacer" />
-
-            <button
-              type="button"
-              className={showSaved ? "fmenu-btn on" : "fmenu-btn"}
-              aria-pressed={showSaved}
-              onClick={() => dispatch({ type: "showSaved", value: !showSaved })}
-            >
-              <IconBookmark />
-              Saved
-              <b>{saved.length}</b>
-            </button>
-            <div className="filters-desktop">
-              <FilterMenu
-                label="Sort"
-                align="right"
-                defaultValue="recommended"
-                selected={sort}
-                options={[
-                  { value: "recommended", label: "Recommended" },
-                  { value: "closest", label: "Closest first" },
-                ]}
-                onSelect={(value) => dispatch({ type: "sort", value: value as Sort })}
-              />
-            </div>
-          </div>
-        </div>
-
-        {activeFilters.length > 0 && (
-          <div className="wrap">
-            <div className="actives">
-              <span className="actives-label">
-                {filtered.length} {filtered.length === 1 ? "match" : "matches"}
-              </span>
-              {activeFilters.map((filter) => (
-                <button key={filter.key} type="button" className="chip-x" onClick={() => dispatch({ type: "clear", key: filter.key })}>
-                  {filter.label}
-                  <IconX />
-                </button>
-              ))}
-              <button type="button" className="chip-clear" onClick={clearAll}>
-                Clear all
-              </button>
-            </div>
-          </div>
-        )}
-
+        <FilterBar
+          view={view}
+          dispatch={dispatch}
+          savedCount={saved.length}
+          resultCount={filtered.length}
+          onOpenSheet={() => setSheetOpen(true)}
+          onClearAll={clearAll}
+        />
         {/* ------------------------------------------------------ spotlight */}
-        {showSpotlight && (
-          <section className="wrap section" aria-label="Best bets near you">
-            <div className="section-head">
-              <div>
-                <p className="eyebrow">Handpicked highlights</p>
-                <h2 className="display">Best bets near you</h2>
-              </div>
-              <p className="count">The three we&rsquo;d pick first this week</p>
-            </div>
-            <div className="spot-grid">
-              {spotlight.map((event, index) => (
-                <button key={event.id} type="button" className="spot" onClick={() => setSelected(event)}>
-                  <span className="spot-rank">
-                    <IconSparkle style={{ width: 13, height: 13 }} />
-                    {index === 0 ? "Featured pick" : index === 1 ? "Family favorite" : "Local highlight"}
-                  </span>
-                  <h3>{event.title}</h3>
-                  <p>{event.description}</p>
-                  <span className="spot-foot">
-                    <span>
-                      {event.town} · {event.distance} mi
-                    </span>
-                    <span className={isFree(event.cost) ? "free" : ""} style={isFree(event.cost) ? { color: "var(--good)" } : undefined}>
-                      {event.cost.length > 26 ? `${event.cost.slice(0, 26)}…` : event.cost}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
-
+        {showSpotlight && <Spotlight spotlight={spotlight} onOpen={setSelected} />}
         {/* -------------------------------------------------------- results */}
         <section className="wrap section" id="results" tabIndex={-1} aria-label={`Events on ${activeDayMeta?.date ?? "the selected day"}`}>
           <div className="section-head">
@@ -946,35 +485,7 @@ export default function Home() {
         </section>
 
         {/* -------------------------------------------------------- sources */}
-        <div className="wrap">
-          <details className="sources">
-            <summary>
-              <IconChevron />
-              Where we look · {FETCHED_SOURCES.length} live feeds
-              <span className="rule" />
-            </summary>
-            <div className="source-grid">
-              <div className="source-col">
-                <h3>Fetched every morning</h3>
-                {FETCHED_SOURCES.map(([label, href]) => (
-                  <a key={href} href={href} target="_blank" rel="noreferrer">
-                    {label}
-                    <IconExternal />
-                  </a>
-                ))}
-              </div>
-              <div className="source-col">
-                <h3>Checked by hand</h3>
-                {MANUAL_SOURCES.map(([label, href]) => (
-                  <a key={href} href={href} target="_blank" rel="noreferrer">
-                    {label}
-                    <IconExternal />
-                  </a>
-                ))}
-              </div>
-            </div>
-          </details>
-        </div>
+        <Sources />
       </main>
 
       <footer className="footer" data-modal-background>
@@ -996,255 +507,42 @@ export default function Home() {
 
       {/* ------------------------------------------------------ detail drawer */}
       {selected && (
-        <div className="scrim">
-          <button type="button" className="scrim-hit" onClick={closeDetails} aria-label="Close details" />
-          <aside className="drawer" role="dialog" aria-modal="true" aria-label={selected.title} ref={detailRef} tabIndex={-1}>
-            <div className="drawer-top">
-              <strong>{selected.day} · {selected.date}</strong>
-              <button type="button" className="icon-btn" onClick={closeDetails} aria-label="Close details">
-                <IconX />
-              </button>
-            </div>
-
-            <div className="drawer-scroll">
-              {selected.image && (
-                <div className="drawer-hero">
-                  <Image src={selected.image} alt="" fill quality={70} sizes="(max-width: 760px) 100vw, 440px" />
-                </div>
-              )}
-              <div className="drawer-body">
-                <div>
-                  <h2>{selected.title}</h2>
-                  <p className="drawer-venue" style={{ marginTop: 10 }}>
-                    <IconPin />
-                    <span>
-                      {selected.venue} · {selected.town} — {selected.distance} miles from Orchard Park
-                    </span>
-                  </p>
-                </div>
-
-                <div className="facts">
-                  <div className="fact">
-                    <span>When</span>
-                    <b>{selected.time}</b>
-                  </div>
-                  <div className="fact">
-                    <span>Cost</span>
-                    <b style={isFree(selected.cost) ? { color: "var(--good)" } : undefined}>{selected.cost}</b>
-                  </div>
-                  <div className="fact">
-                    <span>Setting</span>
-                    <b>{settingLabel(selected.setting)}</b>
-                  </div>
-                  <div className="fact">
-                    <span>Category</span>
-                    <b>{selected.kind || "Community"}</b>
-                  </div>
-                </div>
-
-                <div className="prose">
-                  <h4>About this event</h4>
-                  <p>{selected.description}</p>
-                </div>
-
-                <div className="card-tags">
-                  {[...new Set(selected.tags)].map((tag) => (
-                    <span key={tag} className="tag">
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <a className="btn-ghost" href={selected.url} target="_blank" rel="noreferrer">
-                    <IconTicket style={{ width: 15, height: 15 }} />
-                    {selected.source}
-                    <IconExternal style={{ width: 13, height: 13 }} />
-                  </a>
-                  <button
-                    type="button"
-                    className={saved.includes(selected.id) ? "btn-ghost" : "btn-ghost"}
-                    onClick={() => toggleSave(selected.id)}
-                  >
-                    <IconBookmark style={{ width: 15, height: 15 }} />
-                    {saved.includes(selected.id) ? "Saved" : "Save for later"}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="drawer-foot">
-              <button type="button" className="btn-solid" onClick={() => togglePlan(selected)}>
-                {planItems.some((item) => item.id === selected.id) ? "Remove from My Day" : "Add to My Day"}
-              </button>
-              <a className="btn-ghost" href={selected.mapUrl} target="_blank" rel="noreferrer">
-                <IconPin style={{ width: 15, height: 15 }} />
-                Directions
-              </a>
-            </div>
-          </aside>
-        </div>
+        <EventDrawer
+          selected={selected}
+          isSaved={savedSet.has(selected.id)}
+          inPlan={planIds.has(selected.id)}
+          drawerRef={detailRef}
+          onClose={closeDetails}
+          onToggleSave={toggleSave}
+          onTogglePlan={togglePlan}
+        />
       )}
-
       {/* --------------------------------------------------- My Day drawer */}
       {planOpen && (
-        <div className="scrim">
-          <button type="button" className="scrim-hit" onClick={closePlan} aria-label="Close planner" />
-          <aside className="drawer" role="dialog" aria-modal="true" aria-label="My Day planner" ref={planRef} tabIndex={-1}>
-            <div className="drawer-top">
-              <strong>My Day · {planCount} {planCount === 1 ? "stop" : "stops"}</strong>
-              <button type="button" className="icon-btn" onClick={closePlan} aria-label="Close planner">
-                <IconX />
-              </button>
-            </div>
-
-            <div className="drawer-scroll">
-              <div className="drawer-body">
-                {planCount === 0 ? (
-                  <div className="empty">
-                    <h3>Build your day</h3>
-                    <p>
-                      Tap the <strong>+</strong> on any event card to line up stops. Your itinerary stays on this device, so you can
-                      close the tab and come back to it.
-                    </p>
-                    <button type="button" className="btn-solid" onClick={closePlan}>
-                      Browse events
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="itin">
-                      {planItems.map((item, index) => {
-                        const stop = eventById.get(item.id);
-                        return (
-                        <div className="itin-row" key={item.id}>
-                          <div className="itin-rail">
-                            <span className="itin-num">{index + 1}</span>
-                            <span className="itin-line" />
-                          </div>
-                          <div className={stop ? "itin-card" : "itin-card unavailable"}>
-                            <div style={{ minWidth: 0 }}>
-                              <span className="itin-time">{stop?.time ?? "Unavailable"}</span>
-                              <h4>{stop?.title ?? item.title}</h4>
-                              <p>
-                                {stop ? `${stop.venue} · ${stop.town} — ${stop.distance} mi` : "This event is no longer in the current listings."}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={() => removePlanItem(item.id, stop?.title ?? item.title)}
-                              aria-label={`Remove ${stop?.title ?? item.title} from My Day`}
-                            >
-                              <IconX />
-                            </button>
-                          </div>
-                        </div>
-                      );})}
-                    </div>
-                    <p style={{ margin: 0, color: "var(--text-3)", fontSize: 12.5 }}>
-                      {plan.length === 1 && unavailablePlan.length === 0
-                        ? `${plan[0].distance} miles from Orchard Park.`
-                        : plan.length > 0 ? `Available stops range ${Math.min(...plan.map((stop) => stop.distance))}–${Math.max(
-                            ...plan.map((stop) => stop.distance),
-                          )} miles from Orchard Park.` : "Saved stops are currently unavailable."}
-                    </p>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {planCount > 0 && (
-              <div className="drawer-foot">
-                <button type="button" className="btn-solid" onClick={copyItinerary}>
-                  <IconCopy style={{ width: 15, height: 15 }} />
-                  Copy itinerary
-                </button>
-                <button type="button" className="btn-ghost" onClick={clearPlan}>
-                  Clear
-                </button>
-              </div>
-            )}
-          </aside>
-        </div>
+        <MyDayDrawer
+          planItems={planItems}
+          plan={plan}
+          unavailablePlan={unavailablePlan}
+          eventById={eventById}
+          drawerRef={planRef}
+          onClose={closePlan}
+          onRemove={removePlanItem}
+          onClear={clearPlan}
+          onCopy={copyItinerary}
+        />
       )}
-
       {/* ---------------------------------------------- mobile filter sheet */}
       {sheetOpen && (
-        <div className="scrim bottom">
-          <button type="button" className="scrim-hit" onClick={closeSheet} aria-label="Close filters" />
-          <aside className="sheet" role="dialog" aria-modal="true" aria-label="Filters" ref={sheetRef} tabIndex={-1}>
-            <span className="sheet-grab" aria-hidden="true" />
-            <div className="drawer-top" style={{ background: "transparent", border: 0 }}>
-              <strong>Refine</strong>
-              <button type="button" className="icon-btn" onClick={closeSheet} aria-label="Close filters">
-                <IconX />
-              </button>
-            </div>
-
-            <div className="sheet-scroll">
-              <div className="sheet-group">
-                <h4>Drive time from Orchard Park</h4>
-                <div className="sheet-chips">
-                  {[null, 5, 10, 15].map((option) => (
-                    <button
-                      key={String(option)}
-                      type="button"
-                      aria-pressed={maxDistance === option}
-                      onClick={() => dispatch({ type: "maxDistance", value: option })}
-                    >
-                      {option === null ? `Up to 25 mi · ~${driveMinutes(25)} min` : `Up to ${option} mi · ~${driveMinutes(option)} min`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="sheet-group">
-                <h4>Activity</h4>
-                <div className="sheet-chips">
-                  {KIND_OPTIONS.map((option) => (
-                    <button key={option} type="button" aria-pressed={kind === option} onClick={() => dispatch({ type: "kind", value: option })}>
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="sheet-group">
-                <h4>Setting</h4>
-                <div className="sheet-chips">
-                  {(["all", "indoor", "outdoor"] as SettingFilter[]).map((option) => (
-                    <button key={option} type="button" aria-pressed={setting === option} onClick={() => dispatch({ type: "setting", value: option })}>
-                      {option === "all" ? "Indoor + outdoor" : option === "indoor" ? "Indoor" : "Outdoor"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="sheet-group">
-                <h4>Sort</h4>
-                <div className="sheet-chips">
-                  {(["recommended", "closest"] as Sort[]).map((option) => (
-                    <button key={option} type="button" aria-pressed={sort === option} onClick={() => dispatch({ type: "sort", value: option })}>
-                      {option === "recommended" ? "Recommended" : "Closest first"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="drawer-foot">
-              <button type="button" className="btn-solid" onClick={closeSheet}>
-                Show {filtered.length} {filtered.length === 1 ? "event" : "events"}
-              </button>
-              <button type="button" className="btn-ghost" onClick={clearAll} disabled={activeFilters.length === 0}>
-                Reset
-              </button>
-            </div>
-          </aside>
-        </div>
+        <FilterSheet
+          view={view}
+          dispatch={dispatch}
+          activeCount={activeFilters.length}
+          resultCount={filtered.length}
+          sheetRef={sheetRef}
+          onClose={closeSheet}
+          onClearAll={clearAll}
+        />
       )}
-
       <button type="button" className="fab" onClick={() => setPlanOpen(true)} data-modal-background>
         <IconRoute />
         My Day

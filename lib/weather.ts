@@ -20,3 +20,19 @@ export const weatherSchema = z.object({
 
 export type DayForecast = z.infer<typeof dayForecastSchema>;
 export type Weather = z.infer<typeof weatherSchema>;
+
+/**
+ * WMO weather code → the emoji the cards and day tiles show.
+ *
+ * Lives with the forecast types rather than in a component so the day picker,
+ * the event cards and the hero all read the same sky from one place.
+ */
+export function weatherEmoji(code: number) {
+  if (code === 0) return "☀️";
+  if (code <= 3) return "⛅";
+  if (code <= 48) return "🌫️";
+  if (code <= 67 || (code >= 80 && code <= 82)) return "🌧️";
+  if (code <= 77) return "❄️";
+  if (code >= 95) return "⛈️";
+  return "🌤️";
+}
