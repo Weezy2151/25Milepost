@@ -4,7 +4,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useReducer, useRef, 
 import { parseEventsPayload, parseStoredIds, parseStoredPlan, parseWeatherPayload, type StoredPlanItem } from "../lib/client-data";
 import type { Freshness } from "../lib/events";
 import type { Weather } from "../lib/weather";
-import { eventStatus, nowMinutes } from "../lib/time";
+import { eventStatus, localDateKey, nowMinutes } from "../lib/time";
 import { fallbackEvents } from "./events-data";
 import {
   activeCriteria,
@@ -13,6 +13,7 @@ import {
   resolveSort,
   eventMinutes,
   filterEvents,
+  groupOtherDays,
   isFree,
   viewReducer,
   type EventPick,
@@ -25,6 +26,7 @@ import { FilterBar } from "./components/filter-bar";
 import { FilterSheet } from "./components/filter-sheet";
 import { Hero } from "./components/hero";
 import { MyDayDrawer } from "./components/my-day-drawer";
+import { OtherDays } from "./components/other-days";
 import { Sources } from "./components/sources";
 import { Spotlight } from "./components/spotlight";
 import { IconChevron, IconMoon, IconRoute, IconSearch, IconShare, IconSun, IconX } from "./components/icons";
@@ -167,8 +169,14 @@ export default function Home() {
    * was generated hours earlier.
    */
   const [clock, setClock] = useState<number | null>(null);
+  /** The real local date, which is not always the first day that has events. */
+  const [realTodayKey, setRealTodayKey] = useState<string | null>(null);
   useEffect(() => {
-    const tick = () => setClock(nowMinutes());
+    const tick = () => {
+      const now = new Date();
+      setClock(nowMinutes(now));
+      setRealTodayKey(localDateKey(now));
+    };
     tick();
     const timer = window.setInterval(tick, 60_000);
     return () => window.clearInterval(timer);
@@ -205,7 +213,15 @@ export default function Home() {
   const todayKey = useMemo(() => events.find((event) => event.today)?.dateKey ?? days[0]?.dateKey ?? "", [events, days]);
   const activeDay = selectedDay ?? todayKey;
 
-  const viewingToday = activeDay === todayKey;
+  /**
+   * Whether the day on screen is genuinely today.
+   *
+   * `todayKey` falls back to the first day that has any events, so on a
+   * morning when nothing is on until tomorrow it points at tomorrow. That is
+   * fine for choosing where to land, but nothing may claim to be happening
+   * "now" on the strength of it.
+   */
+  const viewingToday = realTodayKey !== null && activeDay === realTodayKey;
 
   /**
    * "auto" means chronological while you are looking at today, where the next
@@ -258,6 +274,23 @@ export default function Home() {
   }, [filtered, viewingToday, clock]);
 
   const [showEarlier, setShowEarlier] = useState(false);
+
+  /**
+   * What the rest of the week holds for the same filters. The list is one day
+   * at a time, so without this a search matching nothing today reads as though
+   * the site had nothing at all.
+   */
+  const otherDays = useMemo(() => {
+    const { groups, total } = groupOtherDays(baseFiltered, activeDay);
+    const labelled = groups.flatMap((group) => {
+      const meta = days.find((day) => day.dateKey === group.dateKey);
+      return meta ? [{ ...meta, events: group.events }] : [];
+    });
+    return { groups: labelled, total };
+  }, [baseFiltered, activeDay, days]);
+
+  /** Worth showing alongside results only when the visitor is actually searching. */
+  const showOtherDays = otherDays.total > 0 && (query.trim().length > 0 || filtered.length === 0);
 
   const spotlight = useMemo(() => events.filter((event) => (event.priority ?? 0) >= 8).slice(0, 3), [events]);
 
@@ -485,7 +518,7 @@ export default function Home() {
         <section className="wrap section" id="results" tabIndex={-1} aria-label={`Events on ${activeDayMeta?.date ?? "the selected day"}`}>
           <div className="section-head">
             <div>
-              <p className="eyebrow">{activeDay === todayKey ? "Today" : "Plan ahead"}</p>
+              <p className="eyebrow">{viewingToday ? "Today" : "Plan ahead"}</p>
               <h2 className="display">
                 {activeDayMeta ? (activeDayMeta.day === "TODAY" || activeDayMeta.day === "TOMORROW" ? activeDayMeta.day[0] + activeDayMeta.day.slice(1).toLowerCase() : activeDayMeta.date) : "This week"}
               </h2>
@@ -531,7 +564,7 @@ export default function Home() {
                           isSaved={savedSet.has(event.id)}
                           inPlan={planIds.has(event.id)}
                           forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
-                          nowMinutes={clock}
+                          nowMinutes={viewingToday ? clock : null}
                           onToggleSave={toggleSave}
                           onTogglePlan={togglePlan}
                           onOpen={setSelected}
@@ -544,8 +577,14 @@ export default function Home() {
             </>
           ) : (
             <div className="empty">
-              <h3>Nothing that day matches those filters</h3>
-              <p>Try another day above, widen the drive-time radius, or clear what&rsquo;s applied.</p>
+              <h3>
+                Nothing {viewingToday ? "today" : "that day"} matches {query.trim() ? `“${query.trim()}”` : "those filters"}
+              </h3>
+              <p>
+                {otherDays.total > 0
+                  ? `There ${otherDays.total === 1 ? "is 1 match" : `are ${otherDays.total} matches`} on other days this week — pick one below.`
+                  : "Try another day above, widen the drive-time radius, or clear what’s applied."}
+              </p>
               {(activeFilters.length > 0 || selectedDay !== null) && (
                 <button
                   type="button"
@@ -558,6 +597,15 @@ export default function Home() {
                 </button>
               )}
             </div>
+          )}
+
+          {showOtherDays && (
+            <OtherDays
+              groups={otherDays.groups}
+              total={otherDays.total}
+              onOpen={setSelected}
+              onJump={(dateKey) => dispatch({ type: "day", value: dateKey })}
+            />
           )}
         </section>
 

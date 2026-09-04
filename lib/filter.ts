@@ -264,6 +264,41 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
   }
 }
 
+/**
+ * Matches on days other than the one being viewed, in date order.
+ *
+ * The results list shows one day at a time, so a search that matches nothing
+ * today would otherwise read as though the site had nothing at all. This
+ * gathers what the rest of the week holds. Each day contributes at most
+ * `perDay` events so one busy Saturday cannot crowd out the others, and the
+ * listing stops at `limit` — `total` still counts every match.
+ */
+export function groupOtherDays(
+  events: EventPick[],
+  activeDay: string,
+  { limit = 6, perDay = 3 }: { limit?: number; perDay?: number } = {},
+): { groups: { dateKey: string; events: EventPick[] }[]; total: number } {
+  const byDay = new Map<string, EventPick[]>();
+  let total = 0;
+  for (const event of events) {
+    if (!event.dateKey || event.dateKey === activeDay) continue;
+    total += 1;
+    const day = byDay.get(event.dateKey);
+    if (day) day.push(event);
+    else byDay.set(event.dateKey, [event]);
+  }
+
+  const groups: { dateKey: string; events: EventPick[] }[] = [];
+  let shown = 0;
+  for (const dateKey of [...byDay.keys()].sort()) {
+    if (shown >= limit) break;
+    const events = byDay.get(dateKey)!.slice(0, Math.min(perDay, limit - shown));
+    shown += events.length;
+    groups.push({ dateKey, events });
+  }
+  return { groups, total };
+}
+
 /** The filters a visitor has actually applied, as removable chips. */
 export function activeCriteria(criteria: FilterCriteria): { key: keyof FilterCriteria; label: string }[] {
   const list: { key: keyof FilterCriteria; label: string }[] = [];

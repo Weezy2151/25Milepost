@@ -176,3 +176,15 @@ export function formatCountdown(minutes: number) {
 export function nowMinutes(date = new Date()) {
   return date.getHours() * 60 + date.getMinutes();
 }
+
+/**
+ * Today's date as the `YYYY-MM-DD` key the events use, in local time.
+ *
+ * Built from the local calendar fields rather than `toISOString()`, which
+ * would report the UTC date and so roll over to tomorrow every evening.
+ */
+export function localDateKey(date = new Date()) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}

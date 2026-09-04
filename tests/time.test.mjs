@@ -5,6 +5,7 @@ import {
   eventStatus,
   formatCountdown,
   formatMinutes,
+  localDateKey,
   minutesUntil,
   parseEventTime,
   parseStartMinutes,
@@ -131,4 +132,12 @@ test("minutesUntil and formatCountdown describe the wait", () => {
   assert.equal(formatCountdown(25), "in 25 min");
   assert.equal(formatCountdown(60), "in 1 hr");
   assert.equal(formatCountdown(135), "in 2 hr 15 min");
+});
+
+test("localDateKey reports the local date, not the UTC one", () => {
+  // Late evening local time is already tomorrow in UTC; the key must not roll over.
+  const lateEvening = new Date(2026, 8, 4, 23, 30);
+  assert.equal(localDateKey(lateEvening), "2026-09-04");
+  assert.equal(localDateKey(new Date(2026, 0, 1, 0, 5)), "2026-01-01");
+  assert.equal(localDateKey(new Date(2026, 11, 31, 12)), "2026-12-31");
 });

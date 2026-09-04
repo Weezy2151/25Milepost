@@ -1402,3 +1402,71 @@ button { margin: 0; background: none; cursor: pointer; }
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ---------------------------------------------------- matches on other days */
+
+.otherdays {
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.otherdays-head h3 {
+  margin: 0;
+  color: var(--text-2);
+  font: 800 13px/1.3 var(--sans);
+  letter-spacing: 0.02em;
+}
+
+.otherdays-group { display: flex; flex-direction: column; gap: 8px; }
+
+.otherdays-day {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: 800 11px/1 var(--sans);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.otherdays-day span { color: var(--text-3); letter-spacing: 0.03em; }
+.otherdays-day svg { width: 12px; height: 12px; transform: rotate(-90deg); }
+.otherdays-day:hover span { color: var(--text-2); }
+
+.otherdays-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+
+.otherdays-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm, 10px);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.otherdays-list button:hover { border-color: var(--line); background: var(--surface); }
+
+.otherdays-title { color: var(--text); font: 700 13.5px/1.35 var(--sans); }
+
+.otherdays-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-3);
+  font: 600 11.5px/1.3 var(--sans);
+}
+.otherdays-meta svg { width: 12px; height: 12px; flex: none; }
+.otherdays-meta i { font-style: normal; opacity: 0.5; }
+.otherdays-meta b { font-weight: 700; }
+.otherdays-meta b.free { color: var(--good); }

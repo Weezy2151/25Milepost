@@ -8,6 +8,7 @@ import {
   DEFAULT_VIEW,
   driveMinutes,
   filterEvents,
+  groupOtherDays,
   isFree,
   matchesVibe,
   resolveSort,
@@ -248,4 +249,45 @@ test("resolveSort is chronological on today and editorial when planning ahead", 
   // An explicit choice is always honoured.
   assert.equal(resolveSort("closest", true), "closest");
   assert.equal(resolveSort("recommended", true), "recommended");
+});
+
+test("groupOtherDays gathers matches from the rest of the week in date order", () => {
+  const events = [
+    makeEvent({ id: "today-1", dateKey: "2026-09-04" }),
+    makeEvent({ id: "sun-1", dateKey: "2026-09-06" }),
+    makeEvent({ id: "sat-1", dateKey: "2026-09-05" }),
+    makeEvent({ id: "sat-2", dateKey: "2026-09-05" }),
+  ];
+  const { groups, total } = groupOtherDays(events, "2026-09-04");
+
+  assert.equal(total, 3, "the day being viewed is excluded from the count");
+  assert.deepEqual(groups.map((group) => group.dateKey), ["2026-09-05", "2026-09-06"]);
+  assert.deepEqual(groups[0].events.map((event) => event.id), ["sat-1", "sat-2"]);
+});
+
+test("groupOtherDays keeps one busy day from crowding out the others", () => {
+  const events = [
+    ...Array.from({ length: 5 }, (unused, index) => makeEvent({ id: `sat-${index}`, dateKey: "2026-09-05" })),
+    makeEvent({ id: "sun-1", dateKey: "2026-09-06" }),
+  ];
+  const { groups, total } = groupOtherDays(events, "2026-09-04", { limit: 6, perDay: 3 });
+
+  assert.equal(total, 6, "total counts every match, not just the ones listed");
+  assert.equal(groups[0].events.length, 3, "a single day is capped");
+  assert.deepEqual(groups[1].events.map((event) => event.id), ["sun-1"]);
+});
+
+test("groupOtherDays stops at the overall limit", () => {
+  const events = Array.from({ length: 12 }, (unused, index) =>
+    makeEvent({ id: `e-${index}`, dateKey: `2026-09-${String(5 + index).padStart(2, "0")}` }),
+  );
+  const { groups } = groupOtherDays(events, "2026-09-04", { limit: 4, perDay: 3 });
+  assert.equal(groups.reduce((count, group) => count + group.events.length, 0), 4);
+});
+
+test("groupOtherDays ignores events with no date", () => {
+  const events = [makeEvent({ id: "undated", dateKey: undefined }), makeEvent({ id: "dated", dateKey: "2026-09-05" })];
+  const { groups, total } = groupOtherDays(events, "2026-09-04");
+  assert.equal(total, 1);
+  assert.deepEqual(groups[0].events.map((event) => event.id), ["dated"]);
 });
