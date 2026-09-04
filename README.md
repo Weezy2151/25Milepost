@@ -51,6 +51,9 @@ Then open `http://localhost:3000`.
   six hours past that window, so an expired payload is returned immediately while
   one leased rebuild runs behind the response, and a copy of the last payload that ever
   built successfully is kept for a week as a floor. See "Caching on Vercel".
+- `/api/calendar/[id]` and `/api/calendar/my-day?id=…` hand out iCalendar
+  files for one event or a whole itinerary, written by `lib/ics-write.ts` and
+  served from the cached payload — a download never triggers a feed fetch.
 - `vercel.json` declares two Vercel Cron Jobs that hit the authenticated
   `/api/cron/events` route each morning to warm the cache ahead of the first visitor, mirroring the
   scheduled warm-up this project originally ran as a Cloudflare Worker cron

@@ -4,7 +4,9 @@ import Image from "next/image";
 import type { RefObject } from "react";
 
 import { isFree, settingLabel, type EventPick } from "../../lib/filter";
-import { IconBookmark, IconExternal, IconPin, IconShare, IconTicket, IconX } from "./icons";
+import { googleCalendarUrl } from "../../lib/ics-write";
+import { siteOrigin } from "../../lib/site";
+import { IconBookmark, IconClock, IconExternal, IconPin, IconShare, IconTicket, IconX } from "./icons";
 
 /** The slide-over showing one event in full. */
 export function EventDrawer({
@@ -104,6 +106,14 @@ export function EventDrawer({
                   <IconShare style={{ width: 15, height: 15 }} />
                   Copy link
                 </button>
+                <a className="btn-ghost" href={`/api/calendar/${encodeURIComponent(selected.id)}`}>
+                  <IconClock style={{ width: 15, height: 15 }} />
+                  Add to calendar
+                </a>
+                <a className="btn-ghost" href={googleCalendarUrl(selected, siteOrigin)} target="_blank" rel="noreferrer">
+                  <IconExternal style={{ width: 13, height: 13 }} />
+                  Google Calendar
+                </a>
               </div>
             </div>
           </div>

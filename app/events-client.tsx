@@ -784,7 +784,6 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
           planItems={planItems}
           plan={plan}
           unavailablePlan={unavailablePlan}
-          eventById={eventById}
           drawerRef={planRef}
           onClose={closePlan}
           onRemove={removePlanItem}

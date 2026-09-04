@@ -4,14 +4,15 @@ import type { RefObject } from "react";
 
 import type { StoredPlanItem } from "../../lib/client-data";
 import type { EventPick } from "../../lib/filter";
-import { IconCopy, IconX } from "./icons";
+import { buildItinerary, routeUrl } from "../../lib/itinerary";
+import { formatMinutes } from "../../lib/time";
+import { IconClock, IconCopy, IconPin, IconRoute, IconX } from "./icons";
 
 /** The itinerary slide-over: the stops a visitor has lined up for their day. */
 export function MyDayDrawer({
   planItems,
   plan,
   unavailablePlan,
-  eventById,
   drawerRef,
   onClose,
   onRemove,
@@ -21,7 +22,6 @@ export function MyDayDrawer({
   planItems: StoredPlanItem[];
   plan: EventPick[];
   unavailablePlan: StoredPlanItem[];
-  eventById: Map<string, EventPick>;
   drawerRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   onRemove: (id: string, title: string) => void;
@@ -29,6 +29,12 @@ export function MyDayDrawer({
   onCopy: () => void;
 }) {
   const planCount = planItems.length;
+  // The plan becomes an actual day: ordered by time, with clashes and drives.
+  const { stops, unscheduled, clashCount } = buildItinerary(plan);
+  const route = routeUrl([...stops.map((stop) => stop.event), ...unscheduled]);
+  const calendarHref = plan.length
+    ? `/api/calendar/my-day?${plan.map((event) => `id=${encodeURIComponent(event.id)}`).join("&")}`
+    : null;
 
   return (
       <div className="scrim">
@@ -57,51 +63,130 @@ export function MyDayDrawer({
               ) : (
                 <>
                   <div className="itin">
-                    {planItems.map((item, index) => {
-                      const stop = eventById.get(item.id);
-                      return (
-                      <div className="itin-row" key={item.id}>
+                    {stops.map((stop, index) => (
+                      <div className="itin-row" key={stop.event.id}>
                         <div className="itin-rail">
                           <span className="itin-num">{index + 1}</span>
                           <span className="itin-line" />
                         </div>
-                        <div className={stop ? "itin-card" : "itin-card unavailable"}>
-                          <div style={{ minWidth: 0 }}>
-                            <span className="itin-time">{stop?.time ?? "Unavailable"}</span>
-                            <h4>{stop?.title ?? item.title}</h4>
-                            <p>
-                              {stop ? `${stop.venue} · ${stop.town} — ${stop.distance} mi` : "This event is no longer in the current listings."}
+                        <div className="itin-stop">
+                          {/* What it takes to get here from the stop before. */}
+                          {stop.travel && (
+                            <p className={stop.tight ? "itin-travel tight" : "itin-travel"}>
+                              <IconRoute />
+                              {stop.travel.miles} mi · about {stop.travel.minutes} min from the last stop
+                              {stop.tight && " — tight"}
                             </p>
+                          )}
+                          {stop.clashes && (
+                            <p className="itin-travel clash">Overlaps the stop before it</p>
+                          )}
+                          <div className="itin-card">
+                            <div style={{ minWidth: 0 }}>
+                              <span className="itin-time">
+                                {formatMinutes(stop.startMinutes)}
+                                {stop.endMinutes !== null && ` – ${formatMinutes(stop.endMinutes)}`}
+                              </span>
+                              <h4>{stop.event.title}</h4>
+                              <p>{stop.event.venue} · {stop.event.town} — {stop.event.distance} mi</p>
+                            </div>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              onClick={() => onRemove(stop.event.id, stop.event.title)}
+                              aria-label={`Remove ${stop.event.title} from My Day`}
+                            >
+                              <IconX />
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            onClick={() => onRemove(item.id, stop?.title ?? item.title)}
-                            aria-label={`Remove ${stop?.title ?? item.title} from My Day`}
-                          >
-                            <IconX />
-                          </button>
                         </div>
                       </div>
-                    );})}
+                    ))}
+
+                    {/* Saved stops with no readable time cannot be placed in the day. */}
+                    {unscheduled.map((event) => (
+                      <div className="itin-row" key={event.id}>
+                        <div className="itin-rail">
+                          <span className="itin-num">·</span>
+                          <span className="itin-line" />
+                        </div>
+                        <div className="itin-stop">
+                          <div className="itin-card">
+                            <div style={{ minWidth: 0 }}>
+                              <span className="itin-time">{event.time}</span>
+                              <h4>{event.title}</h4>
+                              <p>{event.venue} · {event.town} — {event.distance} mi</p>
+                            </div>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              onClick={() => onRemove(event.id, event.title)}
+                              aria-label={`Remove ${event.title} from My Day`}
+                            >
+                              <IconX />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {unavailablePlan.map((item) => (
+                      <div className="itin-row" key={item.id}>
+                        <div className="itin-rail">
+                          <span className="itin-num">·</span>
+                          <span className="itin-line" />
+                        </div>
+                        <div className="itin-stop">
+                          <div className="itin-card unavailable">
+                            <div style={{ minWidth: 0 }}>
+                              <span className="itin-time">Unavailable</span>
+                              <h4>{item.title}</h4>
+                              <p>This event is no longer in the current listings.</p>
+                            </div>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              onClick={() => onRemove(item.id, item.title)}
+                              aria-label={`Remove ${item.title} from My Day`}
+                            >
+                              <IconX />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <p style={{ margin: 0, color: "var(--text-3)", fontSize: 12.5 }}>
-                    {plan.length === 1 && unavailablePlan.length === 0
-                      ? `${plan[0].distance} miles from Orchard Park.`
-                      : plan.length > 0 ? `Available stops range ${Math.min(...plan.map((stop) => stop.distance))}–${Math.max(
-                          ...plan.map((stop) => stop.distance),
-                        )} miles from Orchard Park.` : "Saved stops are currently unavailable."}
+
+                  <p className="itin-summary">
+                    {clashCount > 0
+                      ? `${clashCount} ${clashCount === 1 ? "stop overlaps" : "stops overlap"} another — check the times before you set out.`
+                      : stops.length > 1
+                        ? "Nothing overlaps. Times and drives are estimates."
+                        : "Times and drives are estimates."}
                   </p>
-                </>
+
+                  {route && (
+                    <a className="btn-ghost itin-route" href={route} target="_blank" rel="noreferrer">
+                      <IconPin style={{ width: 15, height: 15 }} />
+                      Directions through every stop
+                    </a>
+                  )}
+                                </>
               )}
             </div>
           </div>
 
           {planCount > 0 && (
             <div className="drawer-foot">
-              <button type="button" className="btn-solid" onClick={onCopy}>
+              {calendarHref && (
+                <a className="btn-solid" href={calendarHref}>
+                  <IconClock style={{ width: 15, height: 15 }} />
+                  Add day to calendar
+                </a>
+              )}
+              <button type="button" className="btn-ghost" onClick={onCopy}>
                 <IconCopy style={{ width: 15, height: 15 }} />
-                Copy itinerary
+                Copy
               </button>
               <button type="button" className="btn-ghost" onClick={onClear}>
                 Clear

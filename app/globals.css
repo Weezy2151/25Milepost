@@ -1485,3 +1485,24 @@ button { margin: 0; background: none; cursor: pointer; }
 
 .card-cost small .checked { color: var(--text-3); }
 .card-cost small .checked::before { content: " · "; }
+
+/* ------------------------------------------------- My Day, as an itinerary */
+
+.itin-stop { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+
+/* What it takes to reach this stop from the one before it. */
+.itin-travel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-3);
+  font: 600 11.5px/1.3 var(--sans);
+}
+.itin-travel svg { width: 12px; height: 12px; flex: none; }
+.itin-travel.tight { color: var(--warn-ink, var(--warn)); font-weight: 700; }
+.itin-travel.clash { color: var(--danger, #b42318); font-weight: 700; }
+
+.itin-summary { margin: 0; color: var(--text-3); font: 600 12.5px/1.4 var(--sans); }
+
+.itin-route { align-self: flex-start; }
