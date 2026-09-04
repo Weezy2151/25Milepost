@@ -255,7 +255,7 @@ export default function Home() {
   const [setting, setSetting] = useState<SettingFilter>("all");
   const [vibe, setVibe] = useState<Vibe>("all");
   const [maxDistance, setMaxDistance] = useState<number | null>(null);
-  /** null = "today" (whichever day the current event set flags as today). */
+  /** null = the whole week; a date key narrows the list to one day. */
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [sort, setSort] = useState<Sort>("recommended");
   const [query, setQuery] = useState("");
@@ -267,7 +267,6 @@ export default function Home() {
   const [planOpen, setPlanOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
 
-  const [greeting, setGreeting] = useState("Hello, Orchard Park.");
   const [theme, setTheme] = useState<"light" | "dark" | null>(null);
   const [weather, setWeather] = useState<Weather | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(true);
@@ -305,8 +304,6 @@ export default function Home() {
     }
     setTheme(resolvedTheme);
 
-    const hour = new Date().getHours();
-    setGreeting(hour < 12 ? "Good morning, Orchard Park." : hour < 17 ? "Good afternoon, Orchard Park." : "Good evening, Orchard Park.");
     const controller = new AbortController();
 
     (async () => {
@@ -402,6 +399,7 @@ export default function Home() {
   const baseFiltered = useMemo(() => {
     const needle = deferredQuery.trim().toLowerCase();
     const list: EventPick[] = [];
+    const seenIds = new Set<string>();
     for (const { event, text } of searchableEvents) {
       if (kind !== "All activities" && event.kind !== kind && !(!event.kind && event.tags.includes(kind))) continue;
       if (setting !== "all") {
@@ -412,6 +410,8 @@ export default function Home() {
       if (!matchesVibe(event, vibe, text)) continue;
       if (showSaved && !savedSet.has(event.id)) continue;
       if (needle && !text.includes(needle)) continue;
+      if (seenIds.has(event.id)) continue;
+      seenIds.add(event.id);
       list.push(event);
     }
     if (sort === "closest") return [...list].sort((a, b) => a.distance - b.distance);
@@ -437,7 +437,7 @@ export default function Home() {
   const dayWeather = useMemo(() => new Map((weather?.days ?? []).map((day) => [day.dateKey, day])), [weather]);
 
   const todayKey = useMemo(() => events.find((event) => event.today)?.dateKey ?? days[0]?.dateKey ?? "", [events, days]);
-  const activeDay = selectedDay ?? todayKey;
+  const activeDay = selectedDay;
 
   const dayCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -448,9 +448,20 @@ export default function Home() {
     return counts;
   }, [baseFiltered]);
 
-  const filtered = useMemo(() => baseFiltered.filter((event) => event.dateKey === activeDay), [baseFiltered, activeDay]);
+  const filtered = useMemo(
+    () => activeDay ? baseFiltered.filter((event) => event.dateKey === activeDay) : baseFiltered,
+    [baseFiltered, activeDay],
+  );
 
-  const spotlight = useMemo(() => events.filter((event) => (event.priority ?? 0) >= 8).slice(0, 3), [events]);
+  const filteredByDay = useMemo(() => days.map((day) => ({
+    ...day,
+    events: filtered.filter((event) => event.dateKey === day.dateKey),
+  })).filter((day) => day.events.length > 0), [days, filtered]);
+
+  const spotlight = useMemo(
+    () => [...baseFiltered].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3),
+    [baseFiltered],
+  );
 
   /* ---- derived UI state ---- */
 
@@ -474,12 +485,12 @@ export default function Home() {
     setQuery("");
   };
 
-  const showSpotlight = spotlight.length > 0 && activeFilters.length === 0 && activeDay === todayKey;
+  const showSpotlight = spotlight.length > 0 && activeFilters.length === 0 && activeDay === null;
   const activeDayMeta = days.find((day) => day.dateKey === activeDay);
   const todayEvents = useMemo(() => baseFiltered.filter((event) => event.dateKey === todayKey), [baseFiltered, todayKey]);
   const todayCount = todayEvents.length;
-  const freeToday = todayEvents.filter((event) => isFree(event.cost)).length;
-  const closeToday = todayEvents.filter((event) => event.distance <= 5).length;
+  const freeThisWeek = baseFiltered.filter((event) => isFree(event.cost)).length;
+  const closeThisWeek = baseFiltered.filter((event) => event.distance <= 5).length;
 
   /**
    * The forecast for the day on screen.
@@ -489,7 +500,7 @@ export default function Home() {
    * Saturday. Everything weather-facing below reads this instead.
    */
   const dayForecast = useMemo(
-    () => dayWeather.get(activeDay) ?? null,
+    () => activeDay ? dayWeather.get(activeDay) ?? null : null,
     [dayWeather, activeDay],
   );
   const viewingToday = activeDay === todayKey;
@@ -594,7 +605,7 @@ export default function Home() {
 
       {/* Filtering is instant and silent for sighted users; announce it for the rest. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {`${filtered.length} ${filtered.length === 1 ? "event" : "events"} match your filters for the selected day, ${todayCount} today.`}
+        {`${filtered.length} ${filtered.length === 1 ? "event" : "events"} match your filters ${activeDay ? "for the selected day" : "this week"}, ${todayCount} today.`}
       </p>
 
       <header className="topbar" data-modal-background>
@@ -648,23 +659,22 @@ export default function Home() {
       <main id="top" data-modal-background>
         {/* ------------------------------------------------------------ hero */}
         <section className="hero">
-          <div className="wrap hero-grid">
-            <div>
-              <p className="eyebrow">Today around Orchard Park · 25-mile radius</p>
-              <h1 className="display hero-title">{greeting}</h1>
-              <p className="hero-sub">
-                Your local day, figured out. {loading ? <b>Loading live calendars…</b> : <><b>{events.length} events</b> pulled from town calendars, libraries and community desks —
-                refreshed each morning.</>}
+          <div className="wrap week-hero">
+            <div className="week-intro">
+              <p className="eyebrow">Orchard Park + 25 miles · updated every morning</p>
+              <h1 className="display week-title">What should we do this week?</h1>
+              <p className="week-lede">
+                Start with a mood, pick a day if you have one, or browse the whole week. We&rsquo;ve already pulled the local calendars together.
               </p>
 
-              <label className="search">
+              <label className="search week-search">
                 <IconSearch />
                 <input
                   ref={searchRef}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search farmers markets, live music, storytime…"
-                  aria-label="Search events"
+                  placeholder="Search markets, music, storytime…"
+                  aria-label="Search this week"
                 />
                 {query && (
                   <button type="button" className="search-clear" onClick={() => setQuery("")} aria-label="Clear search">
@@ -673,96 +683,40 @@ export default function Home() {
                 )}
               </label>
 
-              <div className="moods" role="group" aria-label="Filter by mood">
-                {MOODS.map((mood) => (
-                  <button
-                    key={mood.id}
-                    type="button"
-                    className="mood"
-                    aria-pressed={vibe === mood.id}
-                    onClick={() => setVibe(vibe === mood.id ? "all" : mood.id)}
-                  >
-                    <i aria-hidden="true">{mood.icon}</i>
-                    {mood.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="aside-stack">
-              <div className="wcard" aria-busy={weatherLoading}>
-                <div className="wcard-head">
-                  <span className={weatherLoading ? "live-dot busy" : "live-dot"} />
-                  Live Orchard Park weather
-                </div>
-                {weather ? (
-                  <>
-                    <div className="wcard-temp">
-                      <b>{weather.now}°</b>
-                      <span>{weather.label}</span>
-                    </div>
-                    <div className="wcard-rows">
-                      {/* The temperature above is live; these two follow whichever
-                          day the picker is on, so they match the list below. */}
-                      <div className="wcard-row">
-                        <span>{viewingToday ? "Today’s high" : `High ${activeDayMeta?.day === "TOMORROW" ? "tomorrow" : (activeDayMeta?.date ?? "")}`}</span>
-                        <b>{dayForecast ? `${dayForecast.high}°` : "—"}</b>
-                      </div>
-                      <div className="wcard-row">
-                        <span>Chance of rain</span>
-                        <b className={rainLikely ? "warn-text" : undefined}>{dayForecast ? `${dayForecast.rain}%` : "—"}</b>
-                      </div>
-                      <div className="wcard-row">
-                        <span>Calendars checked</span>
-                        <b className={feed.state === "live" && feed.ok < feed.total ? "warn-text" : undefined}>
-                          {feed.state === "live" ? `${feed.ok} of ${feed.total}` : loading ? "Checking…" : "Unreachable"}
-                        </b>
-                      </div>
-                      <div className="wcard-row">
-                        <span>Events updated</span>
-                        <b>
-                          {updatedAt
-                            ? `${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${
-                                freshness?.state === "stale" ? " · refreshing" : ""
-                              }`
-                            : loading
-                              ? "Loading…"
-                              : "Snapshot"}
-                        </b>
-                      </div>
-                    </div>
-                  </>
-                ) : weatherLoading ? (
-                  <div className="weather-skeleton" aria-hidden="true">
-                    <span />
-                    <b />
-                    <span />
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                ) : (
-                  <div className="wcard-temp">
-                    <span>Forecast unavailable — check before outdoor plans.</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="glance">
-                <div className="glance-cell">
-                  <b>{todayCount}</b>
-                  <span>Today</span>
-                </div>
-                <div className="glance-cell">
-                  <b>{freeToday}</b>
-                  <span>Free</span>
-                </div>
-                <div className="glance-cell">
-                  <b>{closeToday}</b>
-                  <span>Under 5 mi</span>
+              <div className="intent-block">
+                <span className="intent-label">What sounds good?</span>
+                <div className="moods" role="group" aria-label="Choose what sounds good">
+                  {MOODS.map((mood) => (
+                    <button
+                      key={mood.id}
+                      type="button"
+                      className="mood"
+                      aria-pressed={vibe === mood.id}
+                      onClick={() => setVibe(vibe === mood.id ? "all" : mood.id)}
+                    >
+                      <i aria-hidden="true">{mood.icon}</i>
+                      {mood.label}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
+
+            <aside className="week-glance" aria-label="This week at a glance">
+              <div className="week-glance-head">
+                <span>This week at a glance</span>
+                {weather ? <b>{weather.label} · {weather.now}° now</b> : <b>{weatherLoading ? "Checking weather…" : "Weather unavailable"}</b>}
+              </div>
+              <div className="week-stats">
+                <div><b>{baseFiltered.length}</b><span>things to do</span></div>
+                <div><b>{freeThisWeek}</b><span>free picks</span></div>
+                <div><b>{closeThisWeek}</b><span>within 5 miles</span></div>
+              </div>
+              <p>
+                {loading ? "Loading live calendars…" : feed.state === "live" ? `${feed.ok} of ${feed.total} calendars checked` : "Showing the latest saved listings"}
+                {updatedAt ? ` · updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}
+              </p>
+            </aside>
           </div>
 
           {!loading && feed.state === "snapshot" && (
@@ -834,8 +788,18 @@ export default function Home() {
 
         {/* ------------------------------------------------------- day picker */}
         <section className="wrap daypicker-wrap" aria-label="Choose a day">
-          <p className="daypicker-label">Pick a day this week</p>
+          <p className="daypicker-label">When are you free?</p>
           <div className="daypicker" role="group" aria-label="Day of the week">
+            <button
+              type="button"
+              className="daypicker-btn week-all"
+              aria-pressed={activeDay === null}
+              onClick={() => setSelectedDay(null)}
+            >
+              <b>ALL WEEK</b>
+              <span>Best overview</span>
+              <em>{baseFiltered.length}</em>
+            </button>
             {days.map((day) => (
               <button
                 key={day.dateKey}
@@ -957,22 +921,23 @@ export default function Home() {
 
         {/* ------------------------------------------------------ spotlight */}
         {showSpotlight && (
-          <section className="wrap section" aria-label="Best bets near you">
+          <section className="wrap section shortlist" aria-label="Three good places to start">
             <div className="section-head">
               <div>
-                <p className="eyebrow">Handpicked highlights</p>
-                <h2 className="display">Best bets near you</h2>
+                <p className="eyebrow">Skip the scrolling</p>
+                <h2 className="display">Three good places to start</h2>
               </div>
-              <p className="count">The three we&rsquo;d pick first this week</p>
+              <p className="count">Open one for the details</p>
             </div>
             <div className="spot-grid">
               {spotlight.map((event, index) => (
                 <button key={event.id} type="button" className="spot" onClick={() => setSelected(event)}>
                   <span className="spot-rank">
                     <IconSparkle style={{ width: 13, height: 13 }} />
-                    {index === 0 ? "Featured pick" : index === 1 ? "Family favorite" : "Local highlight"}
+                    {index === 0 ? "Best overall" : index === 1 ? "Easy choice" : "Worth a look"}
                   </span>
                   <h3>{event.title}</h3>
+                  <p className="spot-when">{event.day} · {event.date} · {event.time}</p>
                   <p>{event.description}</p>
                   <span className="spot-foot">
                     <span>
@@ -989,10 +954,10 @@ export default function Home() {
         )}
 
         {/* -------------------------------------------------------- results */}
-        <section className="wrap section" id="results" tabIndex={-1} aria-label={`Events on ${activeDayMeta?.date ?? "the selected day"}`}>
+        <section className="wrap section results-section" id="results" tabIndex={-1} aria-label={activeDayMeta ? `Events on ${activeDayMeta.date}` : "Events this week"}>
           <div className="section-head">
             <div>
-              <p className="eyebrow">{activeDay === todayKey ? "Today" : "Plan ahead"}</p>
+              <p className="eyebrow">{activeDay === null ? "Everything in one place" : activeDay === todayKey ? "Today" : "Plan ahead"}</p>
               <h2 className="display">
                 {activeDayMeta ? (activeDayMeta.day === "TODAY" || activeDayMeta.day === "TOMORROW" ? activeDayMeta.day[0] + activeDayMeta.day.slice(1).toLowerCase() : activeDayMeta.date) : "This week"}
               </h2>
@@ -1003,24 +968,54 @@ export default function Home() {
           </div>
 
           {filtered.length ? (
-            <div className="grid">
-              {filtered.map((event) => (
-                <EventCard
-                  key={event.id}
-                  event={event}
-                  isSaved={savedSet.has(event.id)}
-                  inPlan={planIds.has(event.id)}
-                  forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
-                  onToggleSave={toggleSave}
-                  onTogglePlan={togglePlan}
-                  onOpen={setSelected}
-                />
-              ))}
-            </div>
+            activeDay === null ? (
+              <div className="week-list">
+                {filteredByDay.map((day) => (
+                  <section className="day-group" key={day.dateKey} aria-labelledby={`day-${day.dateKey}`}>
+                    <div className="day-group-head">
+                      <div>
+                        <p>{day.day === "TODAY" || day.day === "TOMORROW" ? day.day : day.day.slice(0, 3)}</p>
+                        <h3 id={`day-${day.dateKey}`}>{day.date}</h3>
+                      </div>
+                      <span>{day.events.length} {day.events.length === 1 ? "pick" : "picks"}</span>
+                    </div>
+                    <div className="grid">
+                      {day.events.map((event) => (
+                        <EventCard
+                          key={event.id}
+                          event={event}
+                          isSaved={savedSet.has(event.id)}
+                          inPlan={planIds.has(event.id)}
+                          forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
+                          onToggleSave={toggleSave}
+                          onTogglePlan={togglePlan}
+                          onOpen={setSelected}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <div className="grid">
+                {filtered.map((event) => (
+                  <EventCard
+                    key={event.id}
+                    event={event}
+                    isSaved={savedSet.has(event.id)}
+                    inPlan={planIds.has(event.id)}
+                    forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
+                    onToggleSave={toggleSave}
+                    onTogglePlan={togglePlan}
+                    onOpen={setSelected}
+                  />
+                ))}
+              </div>
+            )
           ) : (
             <div className="empty">
-              <h3>Nothing that day matches those filters</h3>
-              <p>Try another day above, widen the drive-time radius, or clear what&rsquo;s applied.</p>
+              <h3>Nothing this {activeDay ? "day" : "week"} matches those filters</h3>
+              <p>Try another day, widen the drive-time radius, or clear what&rsquo;s applied.</p>
               {(activeFilters.length > 0 || selectedDay !== null) && (
                 <button
                   type="button"

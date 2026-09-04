@@ -16,9 +16,9 @@ test("server-renders a safe loading state instead of stale event cards", async (
   assert.match(html, /Orchard Park Bee/);
   assert.match(html, /Hamburg Sun/);
 
-  // The greeting and any stored itinerary resolve after mount, so the server
-  // markup must stay time- and storage-independent.
-  assert.match(html, /Hello, Orchard Park\./);
+  // The week-first heading and any stored itinerary are deterministic, so the
+  // server markup must stay time- and storage-independent.
+  assert.match(html, /What should we do this week\?/);
   assert.doesNotMatch(html, /Good (morning|afternoon|evening), Orchard Park/);
 
   assert.equal((html.match(/<article class="card /g) ?? []).length, 0);

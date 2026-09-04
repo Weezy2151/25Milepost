@@ -313,6 +313,76 @@ button { margin: 0; background: none; cursor: pointer; }
   align-items: start;
 }
 .hero-grid > * { min-width: 0; }
+.week-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(290px, 0.65fr);
+  gap: clamp(28px, 5vw, 72px);
+  align-items: end;
+}
+.week-intro { min-width: 0; }
+.week-title {
+  max-width: 820px;
+  margin-top: 12px;
+  font-size: clamp(42px, 6vw, 72px);
+  line-height: 0.98;
+}
+.week-lede {
+  max-width: 62ch;
+  margin-top: 16px;
+  color: var(--text-2);
+  font-size: 17px;
+  line-height: 1.55;
+}
+.week-search { max-width: 680px; }
+.intent-block { margin-top: 20px; }
+.intent-label {
+  color: var(--text-3);
+  font: 800 11px/1.2 var(--sans);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.intent-block .moods { margin-top: 10px; }
+.week-glance {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.week-glance-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 800;
+}
+.week-glance-head span { text-transform: uppercase; letter-spacing: 0.08em; }
+.week-glance-head b { color: var(--text); font-weight: 700; }
+.week-stats { display: grid; grid-template-columns: repeat(3, 1fr); }
+.week-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 18px 12px;
+  border-right: 1px solid var(--line);
+  text-align: center;
+}
+.week-stats div:last-child { border-right: 0; }
+.week-stats b { font: 700 28px/1 var(--serif); letter-spacing: -0.04em; }
+.week-stats span { color: var(--text-3); font-size: 11px; font-weight: 700; }
+.week-glance > p {
+  margin: 0;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+}
 .hero-title {
   margin: 12px 0 0;
   font-size: clamp(38px, 5.2vw, 60px);
@@ -614,6 +684,13 @@ button { margin: 0; background: none; cursor: pointer; }
   color: var(--text);
   transition: background var(--fast), border-color var(--fast), color var(--fast), transform var(--fast);
 }
+.daypicker-btn.week-all {
+  align-items: flex-start;
+  min-width: 128px;
+  padding-inline: 14px;
+  text-align: left;
+}
+.daypicker-btn.week-all em { align-self: flex-end; margin-top: -14px; }
 .daypicker-btn:hover { border-color: var(--line-strong); transform: translateY(-1px); }
 .daypicker-btn b { font: 800 12.5px/1.3 var(--sans); letter-spacing: 0.02em; }
 .daypicker-btn span { font: 700 11px/1.3 var(--sans); color: var(--text-3); }
@@ -817,6 +894,7 @@ button { margin: 0; background: none; cursor: pointer; }
 }
 .spot h3 { margin: 0; font: 700 23px/1.12 var(--serif); letter-spacing: -0.028em; color: var(--text); }
 .spot p { margin: 0; color: var(--text-2); font-size: 13.5px; line-height: 1.5; }
+.spot .spot-when { color: var(--text); font-size: 12px; font-weight: 800; }
 .spot-foot {
   display: flex;
   align-items: center;
@@ -839,6 +917,27 @@ button { margin: 0; background: none; cursor: pointer; }
   grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
   gap: 16px;
 }
+
+.week-list { display: flex; flex-direction: column; gap: 38px; }
+.day-group { scroll-margin-top: calc(var(--topbar-h) + 70px); }
+.day-group-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.day-group-head p {
+  margin: 0 0 2px;
+  color: var(--accent);
+  font: 800 10px/1.2 var(--sans);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.day-group-head h3 { margin: 0; font: 700 24px/1.1 var(--serif); letter-spacing: -0.025em; }
+.day-group-head > span { color: var(--text-3); font-size: 12px; font-weight: 700; }
 
 .card {
   position: relative;
@@ -1323,6 +1422,8 @@ button { margin: 0; background: none; cursor: pointer; }
 
 @media (max-width: 1080px) {
   .hero-grid { grid-template-columns: 1fr; gap: 26px; }
+  .week-hero { grid-template-columns: 1fr; gap: 24px; }
+  .week-glance { max-width: 680px; }
   .aside-stack { flex-direction: row; flex-wrap: wrap; }
   .wcard { flex: 1 1 260px; }
   .glance { flex: 1 1 260px; }
@@ -1331,6 +1432,12 @@ button { margin: 0; background: none; cursor: pointer; }
 @media (max-width: 760px) {
   :root { --gutter: 16px; --topbar-h: 56px; }
   .hero { padding: 26px 0 24px; }
+  .week-title { font-size: clamp(38px, 12vw, 54px); }
+  .week-lede { font-size: 16px; }
+  .week-glance-head { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .week-stats div { padding-inline: 8px; }
+  .week-stats b { font-size: 25px; }
+  .week-stats span { font-size: 10px; }
   .hero-sub { font-size: 15px; }
   .search { height: 50px; }
   .search input { font-size: 16px; }
