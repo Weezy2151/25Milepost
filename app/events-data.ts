@@ -1,14 +1,12 @@
-import type { EventKind as ActivityKind, LiveEvent } from "../lib/events";
+import type { EventPick } from "../lib/filter";
 
 export type { Area } from "../lib/events";
-export type EventKind = "All activities" | ActivityKind;
-export type SettingFilter = "all" | "indoor" | "outdoor";
-export type Vibe = "all" | "outside" | "kids" | "food" | "evening" | "rain" | "drive";
-export type Sort = "recommended" | "closest";
-
-type OptionalLiveFields = "dateKey" | "kind" | "setting" | "priority" | "lat" | "lon" | "distancePrecision";
-/** Fallback snapshots predate the normalized live contract, so enrichment fields remain optional only here. */
-export type EventPick = Omit<LiveEvent, OptionalLiveFields> & Partial<Pick<LiveEvent, OptionalLiveFields>>;
+/**
+ * The view-model types live with the filtering rules in `lib/filter.ts` so that
+ * logic stays testable outside the React tree; they are re-exported here
+ * because this module is where the page has always imported them from.
+ */
+export type { EventKind, EventPick, SettingFilter, Sort, Vibe } from "../lib/filter";
 
 /**
  * The bundled snapshot is a point-in-time copy, not live data. Surfacing the

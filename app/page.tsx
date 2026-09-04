@@ -5,65 +5,26 @@ import Image from "next/image";
 import { parseEventsPayload, parseStoredIds, parseStoredPlan, parseWeatherPayload, type StoredPlanItem } from "../lib/client-data";
 import type { Freshness } from "../lib/events";
 import type { DayForecast, Weather } from "../lib/weather";
+import { fallbackEvents, SNAPSHOT_DATE } from "./events-data";
 import {
-  fallbackEvents,
-  SNAPSHOT_DATE,
+  buildSearchIndex,
+  driveMinutes,
+  filterEvents,
+  isFree,
+  KIND_OPTIONS,
+  moodLabel,
+  MOODS,
+  settingLabel,
   type EventKind,
   type EventPick,
+  type FilterCriteria,
   type SettingFilter,
   type Sort,
   type Vibe,
-} from "./events-data";
+} from "../lib/filter";
 import { FilterMenu } from "./components/filter-menu";
 import { IconBookmark, IconCheck, IconChevron, IconClock, IconCopy, IconExternal, IconMoon, IconPin, IconPlus, IconRoute, IconSearch, IconShare, IconSparkle, IconSun, IconTicket, IconX } from "./components/icons";
 import { useModal } from "./components/use-modal";
-
-/* ---------------------------------------------------------------- helpers */
-
-const KIND_OPTIONS: EventKind[] = [
-  "All activities",
-  "Fairs & festivals",
-  "Markets & food",
-  "Live music",
-  "Sports & active",
-  "Outdoors",
-  "Museums & culture",
-  "Community",
-  "Library",
-];
-
-const MOODS: { id: Vibe; icon: string; label: string }[] = [
-  { id: "outside", icon: "🌳", label: "Get outside" },
-  { id: "kids", icon: "🧸", label: "Keep kids busy" },
-  { id: "food", icon: "🥐", label: "Eat & browse" },
-  { id: "evening", icon: "🌙", label: "After 5" },
-  { id: "rain", icon: "🏛️", label: "Rain plan" },
-  { id: "drive", icon: "🚗", label: "Worth the drive" },
-];
-
-const SAVED_KEY = "twenty-five-mile-post-clippings";
-const PLAN_KEY = "twenty-five-mile-post-myday";
-const THEME_KEY = "twenty-five-mile-post-theme";
-
-/** Only "Free…" with no dollar figure counts — "12 & under free" still has a ticket price. */
-function isFree(cost: string) {
-  return /^\s*free/i.test(cost) && !cost.includes("$");
-}
-
-/** Rough drive time from Orchard Park — a mix of village roads and highway, ~32 mph average. */
-function driveMinutes(distance: number) {
-  return Math.max(5, Math.round((distance / 32) * 60));
-}
-
-function settingLabel(setting?: EventPick["setting"]) {
-  if (setting === "indoor") return "Indoor";
-  if (setting === "outdoor") return "Outdoor";
-  return "Indoor + outdoor";
-}
-
-function moodLabel(vibe: Vibe) {
-  return MOODS.find((mood) => mood.id === vibe)?.label ?? "All";
-}
 
 /* ------------------------------------------------------------- event card */
 
@@ -228,6 +189,10 @@ const MANUAL_SOURCES: Array<[string, string]> = [
   ["Hamburg Sun", "https://www.sun-news.com/"],
 ];
 
+const SAVED_KEY = "twenty-five-mile-post-clippings";
+const PLAN_KEY = "twenty-five-mile-post-myday";
+const THEME_KEY = "twenty-five-mile-post-theme";
+
 function persist(key: string, value: unknown) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
@@ -360,63 +325,23 @@ export default function Home() {
 
   /* ---- filtering ---- */
 
-  const searchableEvents = useMemo(() => events.map((event) => ({
-    event,
-    text: `${event.title} ${event.description} ${event.venue} ${event.town} ${event.tags.join(" ")} ${event.kind || ""}`.toLowerCase(),
-  })), [events]);
+  const searchableEvents = useMemo(() => buildSearchIndex(events), [events]);
 
-  const matchesVibe = useCallback((event: EventPick, choice: Vibe, text: string) => {
-    if (choice === "all") return true;
-    if (choice === "outside") {
-      if (event.setting === "outdoor" || event.setting === "both") return true;
-      // Match outdoor-oriented keywords but NOT town names like "Orchard Park"
-      return /\b(trail|hike|hiking|nature|outdoor|lawn|garden|beach|waterfront)\b/i.test(text)
-        || /\bpark\b/i.test(event.venue) || /\bpark\b/i.test(event.title);
-    }
-    if (choice === "kids") {
-      // Exclude age-gated events — 18+/21+ bars, breweries, etc.
-      if (/\b(18\+|21\+|adults?\s*only)\b/i.test(text) || event.tags?.includes("21+")) return false;
-      return /\b(kids|family|children|storytime|playground|playhouse|play cafe|play area|animals|museum)\b/i.test(text) || event.kind === "Library";
-    }
-    if (choice === "food") return event.kind === "Markets & food" || /\b(market|produce|farm|food|tasting|bakery|food truck)\b/i.test(text);
-    if (choice === "evening") {
-      // Check whether the event actually starts at or after 5 PM
-      const hourMatch = event.time.match(/(\d{1,2})(?::\d{2})?\s*(AM|PM)/i);
-      if (hourMatch) {
-        const hour = Number(hourMatch[1]);
-        const isPm = /pm/i.test(hourMatch[2]);
-        const hour24 = isPm ? (hour === 12 ? 12 : hour + 12) : (hour === 12 ? 0 : hour);
-        if (hour24 >= 17) return true;
-      }
-      // Also match explicitly evening-oriented content
-      return /\b(night|sunset|evening)\b/i.test(event.time)
-        || /\b(concert|live music|theater|theatre|bills|bisons)\b/i.test(text);
-    }
-    if (choice === "rain") return event.setting === "indoor" || /\b(museum|indoor|library|play cafe|escape|theatre)\b/i.test(text);
-    if (choice === "drive") return event.distance >= 12;
-    return true;
-  }, []);
+  /**
+   * Every filter except which day is selected — used both for the results list
+   * and to count how many events each day tab would show, so the two can never
+   * disagree. The rules themselves live in `lib/filter.ts`, where they are
+   * unit-tested.
+   */
+  const criteria: FilterCriteria = useMemo(
+    () => ({ kind, setting, vibe, maxDistance, sort, query: deferredQuery, showSaved }),
+    [kind, setting, vibe, maxDistance, sort, deferredQuery, showSaved],
+  );
 
-  // Every filter except which day is selected — used both for the results list
-  // and to count how many events each day tab would show.
-  const baseFiltered = useMemo(() => {
-    const needle = deferredQuery.trim().toLowerCase();
-    const list: EventPick[] = [];
-    for (const { event, text } of searchableEvents) {
-      if (kind !== "All activities" && event.kind !== kind && !(!event.kind && event.tags.includes(kind))) continue;
-      if (setting !== "all") {
-        const eventSetting = event.setting || "both";
-        if (eventSetting !== setting && eventSetting !== "both") continue;
-      }
-      if (maxDistance !== null && event.distance > maxDistance) continue;
-      if (!matchesVibe(event, vibe, text)) continue;
-      if (showSaved && !savedSet.has(event.id)) continue;
-      if (needle && !text.includes(needle)) continue;
-      list.push(event);
-    }
-    if (sort === "closest") return [...list].sort((a, b) => a.distance - b.distance);
-    return list;
-  }, [searchableEvents, kind, setting, maxDistance, vibe, showSaved, savedSet, deferredQuery, sort, matchesVibe]);
+  const baseFiltered = useMemo(
+    () => filterEvents(searchableEvents, criteria, savedSet),
+    [searchableEvents, criteria, savedSet],
+  );
 
   /** The week's days in order, one tile per distinct date the current event set covers. */
   const days = useMemo(() => {
