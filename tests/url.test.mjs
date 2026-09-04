@@ -17,6 +17,7 @@ test("only what the visitor changed is written", () => {
   assert.equal(params({ ...DEFAULT_VIEW, day: "2026-09-05" }), "day=2026-09-05");
   assert.equal(params({ ...DEFAULT_VIEW, maxDistance: 10 }), "within=10");
   assert.equal(params({ ...DEFAULT_VIEW, showSaved: true }), "saved=1");
+  assert.equal(params({ ...DEFAULT_VIEW, freeOnly: true }), "free=1");
   assert.equal(params({ ...DEFAULT_VIEW, sort: "closest" }), "sort=closest");
   // "auto" is the default, so it stays out of the URL.
   assert.equal(params({ ...DEFAULT_VIEW, sort: "auto" }), "");
@@ -37,6 +38,7 @@ test("every view survives a round trip through the URL", () => {
     sort: "closest",
     query: "concert",
     showSaved: true,
+    freeOnly: true,
   };
   assert.deepEqual(roundTrip(view), view);
   assert.deepEqual(roundTrip(DEFAULT_VIEW), DEFAULT_VIEW);

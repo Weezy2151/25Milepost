@@ -4,7 +4,7 @@ import type { Dispatch, RefObject } from "react";
 
 import type { Freshness } from "../../lib/events";
 import { MOODS, type SettingFilter, type ViewAction, type Vibe } from "../../lib/filter";
-import type { DayForecast, Weather } from "../../lib/weather";
+import { dayAdvisory, RAIN_ADVISORY_PERCENT, type DayForecast, type Weather } from "../../lib/weather";
 import { SNAPSHOT_DATE } from "../events-data";
 import type { DayTile } from "./day-picker";
 import { IconSearch, IconX } from "./icons";
@@ -34,10 +34,12 @@ export function Hero({
   dayForecast,
   activeDayMeta,
   viewingToday,
-  rainLikely,
   todayCount,
   freeToday,
   closeToday,
+  freeOnly,
+  maxDistance,
+  onShowToday,
 }: {
   greeting: string;
   loading: boolean;
@@ -55,11 +57,16 @@ export function Hero({
   dayForecast: DayForecast | null;
   activeDayMeta: DayTile | undefined;
   viewingToday: boolean;
-  rainLikely: boolean;
   todayCount: number;
   freeToday: number;
   closeToday: number;
+  freeOnly: boolean;
+  maxDistance: number | null;
+  onShowToday: () => void;
 }) {
+  // The single most consequential thing about the day's weather, if anything.
+  const advisory = dayAdvisory(dayForecast);
+
   return (
     <section className="hero">
       <div className="wrap hero-grid">
@@ -124,7 +131,7 @@ export function Hero({
                   </div>
                   <div className="wcard-row">
                     <span>Chance of rain</span>
-                    <b className={rainLikely ? "warn-text" : undefined}>{dayForecast ? `${dayForecast.rain}%` : "—"}</b>
+                    <b className={dayForecast && dayForecast.rain >= RAIN_ADVISORY_PERCENT ? "warn-text" : undefined}>{dayForecast ? `${dayForecast.rain}%` : "—"}</b>
                   </div>
                   <div className="wcard-row">
                     <span>Calendars checked</span>
@@ -162,19 +169,42 @@ export function Hero({
             )}
           </div>
 
+          {/*
+            These three numbers are the questions people actually arrive with,
+            so each one is the filter that answers it rather than a statistic
+            to read and act on by hand.
+          */}
           <div className="glance">
-            <div className="glance-cell">
+            <button
+              type="button"
+              className="glance-cell"
+              aria-pressed={viewingToday}
+              onClick={onShowToday}
+              title="Show today's events"
+            >
               <b>{todayCount}</b>
               <span>Today</span>
-            </div>
-            <div className="glance-cell">
+            </button>
+            <button
+              type="button"
+              className="glance-cell"
+              aria-pressed={freeOnly}
+              onClick={() => dispatch({ type: "freeOnly", value: !freeOnly })}
+              title={freeOnly ? "Show events at any price" : "Show only free events"}
+            >
               <b>{freeToday}</b>
               <span>Free</span>
-            </div>
-            <div className="glance-cell">
+            </button>
+            <button
+              type="button"
+              className="glance-cell"
+              aria-pressed={maxDistance === 5}
+              onClick={() => dispatch({ type: "maxDistance", value: maxDistance === 5 ? null : 5 })}
+              title={maxDistance === 5 ? "Show the full 25-mile radius" : "Show only events within 5 miles"}
+            >
               <b>{closeToday}</b>
               <span>Under 5 mi</span>
-            </div>
+            </button>
           </div>
         </div>
       </div>
@@ -223,24 +253,25 @@ export function Hero({
         </div>
       )}
 
-      {rainLikely && (
+      {advisory && (
         <div className="wrap">
           <div className="advisory">
             <p>
-              🌧️{" "}
+              {advisory.icon}{" "}
               <strong>
-                {dayForecast!.rain}% chance of rain{" "}
-                {viewingToday ? "today" : `on ${activeDayMeta?.date ?? "that day"}`}.
+                {advisory.headline} {viewingToday ? "today" : `on ${activeDayMeta?.date ?? "that day"}`}.
               </strong>{" "}
-              Good {viewingToday ? "day" : "one"} for libraries, museums, play cafés and indoor games.
+              {advisory.suggestion}
             </p>
-            <button
-              type="button"
-              className={setting === "indoor" ? "on" : ""}
-              onClick={() => dispatch({ type: "setting", value: setting === "indoor" ? "all" : "indoor" })}
-            >
-              {setting === "indoor" ? "Showing indoor only" : "Show indoor picks"}
-            </button>
+            {advisory.suggestsIndoor && (
+              <button
+                type="button"
+                className={setting === "indoor" ? "on" : ""}
+                onClick={() => dispatch({ type: "setting", value: setting === "indoor" ? "all" : "indoor" })}
+              >
+                {setting === "indoor" ? "Showing indoor only" : "Show indoor picks"}
+              </button>
+            )}
           </div>
         </div>
       )}

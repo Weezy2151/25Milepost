@@ -41,7 +41,7 @@ export function FilterBar({
   onOpenSheet: () => void;
   onClearAll: () => void;
 }) {
-  const { kind, setting, sort, maxDistance, showSaved } = view;
+  const { kind, setting, sort, maxDistance, showSaved, freeOnly } = view;
   const activeFilters = activeCriteria(view);
   // The menu shows what the list is actually ordered by, not the word "auto".
   const resolvedSort = resolveSort(sort, viewingToday);
@@ -62,7 +62,7 @@ export function FilterBar({
 
           <div className="filters-desktop">
           <FilterMenu
-            label="Drive time"
+            label="Distance"
             defaultValue="any"
             selected={maxDistance === null ? "any" : String(maxDistance)}
             options={[
@@ -95,6 +95,14 @@ export function FilterBar({
 
           <span className="filter-spacer" />
 
+          <button
+            type="button"
+            className={freeOnly ? "fmenu-btn on" : "fmenu-btn"}
+            aria-pressed={freeOnly}
+            onClick={() => dispatch({ type: "freeOnly", value: !freeOnly })}
+          >
+            Free only
+          </button>
           <button
             type="button"
             className={showSaved ? "fmenu-btn on" : "fmenu-btn"}

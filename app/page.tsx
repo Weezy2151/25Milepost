@@ -69,7 +69,7 @@ export default function Home() {
    * current event set flags as today".
    */
   const [view, dispatch] = useReducer(viewReducer, DEFAULT_VIEW);
-  const { kind, setting, vibe, maxDistance, sort, query, showSaved, day: selectedDay } = view;
+  const { kind, setting, vibe, maxDistance, sort, query, showSaved, freeOnly, day: selectedDay } = view;
 
   const [saved, setSaved] = useState<string[]>([]);
   const [planItems, setPlanItems] = useState<StoredPlanItem[]>([]);
@@ -333,8 +333,8 @@ export default function Home() {
    * unit-tested.
    */
   const criteria: FilterCriteria = useMemo(
-    () => ({ kind, setting, vibe, maxDistance, sort: resolvedSort, query: deferredQuery, showSaved }),
-    [kind, setting, vibe, maxDistance, resolvedSort, deferredQuery, showSaved],
+    () => ({ kind, setting, vibe, maxDistance, sort: resolvedSort, query: deferredQuery, showSaved, freeOnly }),
+    [kind, setting, vibe, maxDistance, resolvedSort, deferredQuery, showSaved, freeOnly],
   );
 
   const baseFiltered = useMemo(
@@ -393,6 +393,19 @@ export default function Home() {
     return { groups: labelled, total };
   }, [baseFiltered, activeDay, days]);
 
+  /**
+   * How current the listings are, shown on each card.
+   *
+   * The page already says at feed level when the data is stale; this carries
+   * the same assurance down to the row someone is about to act on. It is only
+   * claimed for a payload that actually came back fresh.
+   */
+  const checkedLabel = useMemo(() => {
+    if (!updatedAt || freshness?.state === "last-good") return "";
+    const time = new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return `checked ${time}`;
+  }, [updatedAt, freshness]);
+
   /** Worth showing alongside results only when the visitor is actually searching. */
   const showOtherDays = otherDays.total > 0 && (query.trim().length > 0 || filtered.length === 0);
 
@@ -422,7 +435,6 @@ export default function Home() {
     () => dayWeather.get(activeDay) ?? null,
     [dayWeather, activeDay],
   );
-  const rainLikely = dayForecast !== null && dayForecast.rain >= 40;
 
   /* ---- actions ---- */
 
@@ -604,10 +616,12 @@ export default function Home() {
           dayForecast={dayForecast}
           activeDayMeta={activeDayMeta}
           viewingToday={viewingToday}
-          rainLikely={rainLikely}
           todayCount={todayCount}
           freeToday={freeToday}
           closeToday={closeToday}
+          freeOnly={freeOnly}
+          maxDistance={maxDistance}
+          onShowToday={() => dispatch({ type: "day", value: realTodayKey ?? todayKey })}
         />
         {/* ------------------------------------------------------- day picker */}
         <DayPicker
@@ -655,6 +669,7 @@ export default function Home() {
                       inPlan={planIds.has(event.id)}
                       forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
                       nowMinutes={viewingToday ? clock : null}
+                      checkedLabel={checkedLabel}
                       onToggleSave={toggleSave}
                       onTogglePlan={togglePlan}
                       onOpen={openEvent}
@@ -680,6 +695,7 @@ export default function Home() {
                           inPlan={planIds.has(event.id)}
                           forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
                           nowMinutes={viewingToday ? clock : null}
+                          checkedLabel={checkedLabel}
                           onToggleSave={toggleSave}
                           onTogglePlan={togglePlan}
                           onOpen={openEvent}

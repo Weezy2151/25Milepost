@@ -457,7 +457,19 @@ button { margin: 0; background: none; cursor: pointer; }
 .weather-skeleton > :nth-child(n + 3) { width: 100%; }
 
 .glance { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
-.glance-cell { padding: 14px 12px; background: var(--surface); text-align: center; }
+.glance-cell {
+  padding: 14px 12px;
+  border: 0;
+  background: var(--surface);
+  color: inherit;
+  text-align: center;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.glance-cell:hover { background: color-mix(in oklab, var(--accent) 7%, var(--surface)); }
+.glance-cell[aria-pressed="true"] { background: var(--accent-soft); }
+.glance-cell[aria-pressed="true"] b { color: var(--accent); }
 .glance-cell b { display: block; font: 700 24px/1 var(--serif); letter-spacing: -0.03em; }
 .glance-cell span { display: block; margin-top: 5px; color: var(--text-3); font: 700 10px/1.2 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
 
@@ -632,14 +644,14 @@ button { margin: 0; background: none; cursor: pointer; }
   font-style: normal;
   color: var(--text-2);
 }
-.daypicker-btn[aria-pressed="true"] {
+.daypicker-btn[aria-checked="true"] {
   background: var(--text);
   border-color: var(--text);
   color: var(--bg);
 }
-.daypicker-btn[aria-pressed="true"] span,
-.daypicker-btn[aria-pressed="true"] .daypicker-sky,
-.daypicker-btn[aria-pressed="true"] em { color: var(--bg); opacity: 0.8; }
+.daypicker-btn[aria-checked="true"] span,
+.daypicker-btn[aria-checked="true"] .daypicker-sky,
+.daypicker-btn[aria-checked="true"] em { color: var(--bg); opacity: 0.8; }
 
 /* ============================================================
    Filter bar (single source of truth)
@@ -1470,3 +1482,6 @@ button { margin: 0; background: none; cursor: pointer; }
 .otherdays-meta i { font-style: normal; opacity: 0.5; }
 .otherdays-meta b { font-weight: 700; }
 .otherdays-meta b.free { color: var(--good); }
+
+.card-cost small .checked { color: var(--text-3); }
+.card-cost small .checked::before { content: " · "; }

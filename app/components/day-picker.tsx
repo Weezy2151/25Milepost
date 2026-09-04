@@ -1,5 +1,7 @@
 "use client";
 
+import { useRef } from "react";
+
 import type { DayForecast } from "../../lib/weather";
 import { weatherEmoji } from "../../lib/weather";
 
@@ -19,16 +21,41 @@ export function DayPicker({
   dayWeather: Map<string, DayForecast>;
   onSelect: (dateKey: string) => void;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
+
+  /** Arrow keys move along the week; Home and End jump to its ends. */
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
+    if (!keys.includes(event.key)) return;
+    const index = days.findIndex((day) => day.dateKey === activeDay);
+    if (index === -1) return;
+    event.preventDefault();
+
+    const step = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+    const next =
+      event.key === "Home" ? 0
+      : event.key === "End" ? days.length - 1
+      : (index + step + days.length) % days.length;
+
+    onSelect(days[next].dateKey);
+    // Move focus with the selection, as a radio group does.
+    listRef.current?.querySelectorAll("button")[next]?.focus();
+  };
+
   return (
     <section className="wrap daypicker-wrap" aria-label="Choose a day">
       <p className="daypicker-label">Pick a day this week</p>
-      <div className="daypicker" role="group" aria-label="Day of the week">
+      <div className="daypicker" role="radiogroup" aria-label="Day of the week" tabIndex={-1} ref={listRef} onKeyDown={onKeyDown}>
         {days.map((day) => (
           <button
             key={day.dateKey}
             type="button"
             className="daypicker-btn"
-            aria-pressed={day.dateKey === activeDay}
+            role="radio"
+            aria-checked={day.dateKey === activeDay}
+            // One tab stop for the whole row; the arrow keys move within it,
+            // which is what a radio group is expected to do.
+            tabIndex={day.dateKey === activeDay ? 0 : -1}
             onClick={() => onSelect(day.dateKey)}
           >
             <b>{day.day === "TODAY" || day.day === "TOMORROW" ? day.day : day.day.slice(0, 3)}</b>

@@ -164,6 +164,8 @@ export type FilterCriteria = {
   sort: Sort;
   query: string;
   showSaved: boolean;
+  /** Only listings that cost nothing — see isFree, which is stricter than it looks. */
+  freeOnly: boolean;
 };
 
 export const DEFAULT_CRITERIA: FilterCriteria = {
@@ -174,6 +176,7 @@ export const DEFAULT_CRITERIA: FilterCriteria = {
   sort: "auto",
   query: "",
   showSaved: false,
+  freeOnly: false,
 };
 
 /**
@@ -199,6 +202,7 @@ export function filterEvents(
     if (criteria.maxDistance !== null && event.distance > criteria.maxDistance) continue;
     if (!matchesVibe(event, criteria.vibe, text)) continue;
     if (criteria.showSaved && !savedIds.has(event.id)) continue;
+    if (criteria.freeOnly && !isFree(event.cost)) continue;
     if (needle && !text.includes(needle)) continue;
     list.push(event);
   }
@@ -239,6 +243,7 @@ export type ViewAction =
   | { type: "sort"; value: Sort }
   | { type: "query"; value: string }
   | { type: "showSaved"; value: boolean }
+  | { type: "freeOnly"; value: boolean }
   | { type: "day"; value: string | null }
   /** Return one filter to its default — the removable chips above. */
   | { type: "clear"; key: keyof FilterCriteria }
@@ -311,6 +316,7 @@ export function activeCriteria(criteria: FilterCriteria): { key: keyof FilterCri
   if (criteria.setting !== "all") list.push({ key: "setting", label: criteria.setting === "indoor" ? "Indoor" : "Outdoor" });
   if (criteria.maxDistance !== null) list.push({ key: "maxDistance", label: `Within ${criteria.maxDistance} mi` });
   if (criteria.showSaved) list.push({ key: "showSaved", label: "Saved only" });
+  if (criteria.freeOnly) list.push({ key: "freeOnly", label: "Free only" });
   if (criteria.query.trim()) list.push({ key: "query", label: `“${criteria.query.trim()}”` });
   return list;
 }

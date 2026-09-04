@@ -33,6 +33,7 @@ const PARAM = {
   sort: "sort",
   query: "q",
   showSaved: "saved",
+  freeOnly: "free",
 } as const;
 
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
@@ -52,6 +53,7 @@ export function viewToParams(view: ViewState): URLSearchParams {
   const query = view.query.trim();
   if (query) params.set(PARAM.query, query);
   if (view.showSaved) params.set(PARAM.showSaved, "1");
+  if (view.freeOnly) params.set(PARAM.freeOnly, "1");
   return params;
 }
 
@@ -88,6 +90,7 @@ export function viewFromParams(params: URLSearchParams): ViewState {
   if (query) view.query = query.slice(0, 120);
 
   if (params.get(PARAM.showSaved) === "1") view.showSaved = true;
+  if (params.get(PARAM.freeOnly) === "1") view.freeOnly = true;
 
   return view;
 }

@@ -14,6 +14,7 @@ export const EventCard = memo(function EventCard({
   inPlan,
   forecast,
   nowMinutes,
+  checkedLabel,
   onToggleSave,
   onTogglePlan,
   onOpen,
@@ -24,6 +25,8 @@ export const EventCard = memo(function EventCard({
   forecast: DayForecast | null;
   /** Local time as minutes past midnight, or null for a day that is not today. */
   nowMinutes: number | null;
+  /** How current this listing is, e.g. "checked 6:12 AM". Empty while loading. */
+  checkedLabel: string;
   onToggleSave: (id: string) => void;
   onTogglePlan: (event: EventPick) => void;
   onOpen: (event: EventPick) => void;
@@ -109,7 +112,10 @@ export const EventCard = memo(function EventCard({
           <b className={isFree(event.cost) ? "free" : ""} title={event.cost}>
             {event.cost}
           </b>
-          <small>via {event.source}</small>
+          <small>
+            via {event.source}
+            {checkedLabel && <span className="checked">{checkedLabel}</span>}
+          </small>
         </div>
         <div className="card-acts">
           <button

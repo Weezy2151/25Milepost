@@ -34,7 +34,7 @@ export function FilterSheet({
   onClose: () => void;
   onClearAll: () => void;
 }) {
-  const { kind, setting, sort, maxDistance } = view;
+  const { kind, setting, sort, maxDistance, freeOnly } = view;
   const resolvedSort = resolveSort(sort, viewingToday);
 
   return (
@@ -51,7 +51,7 @@ export function FilterSheet({
 
           <div className="sheet-scroll">
             <div className="sheet-group">
-              <h4>Drive time from Orchard Park</h4>
+              <h4>Distance from Orchard Park</h4>
               <div className="sheet-chips">
                 {[null, 5, 10, 15].map((option) => (
                   <button
@@ -85,6 +85,18 @@ export function FilterSheet({
                     {option === "all" ? "Indoor + outdoor" : option === "indoor" ? "Indoor" : "Outdoor"}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="sheet-group">
+              <h4>Cost</h4>
+              <div className="sheet-chips">
+                <button type="button" aria-pressed={!freeOnly} onClick={() => dispatch({ type: "freeOnly", value: false })}>
+                  Any price
+                </button>
+                <button type="button" aria-pressed={freeOnly} onClick={() => dispatch({ type: "freeOnly", value: true })}>
+                  Free only
+                </button>
               </div>
             </div>
 
