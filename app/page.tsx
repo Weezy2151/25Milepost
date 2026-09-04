@@ -1,26 +1,27 @@
 "use client";
 
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import Image from "next/image";
 import { parseEventsPayload, parseStoredIds, parseStoredPlan, parseWeatherPayload, type StoredPlanItem } from "../lib/client-data";
 import type { Freshness } from "../lib/events";
 import type { DayForecast, Weather } from "../lib/weather";
 import { fallbackEvents, SNAPSHOT_DATE } from "./events-data";
 import {
+  activeCriteria,
   buildSearchIndex,
+  DEFAULT_VIEW,
   driveMinutes,
   filterEvents,
   isFree,
   KIND_OPTIONS,
-  moodLabel,
   MOODS,
   settingLabel,
+  viewReducer,
   type EventKind,
   type EventPick,
   type FilterCriteria,
   type SettingFilter,
   type Sort,
-  type Vibe,
 } from "../lib/filter";
 import { FilterMenu } from "./components/filter-menu";
 import { IconBookmark, IconCheck, IconChevron, IconClock, IconCopy, IconExternal, IconMoon, IconPin, IconPlus, IconRoute, IconSearch, IconShare, IconSparkle, IconSun, IconTicket, IconX } from "./components/icons";
@@ -216,15 +217,14 @@ export default function Home() {
   /** How current the API said its payload was — see `freshness` in the route. */
   const [freshness, setFreshness] = useState<Freshness | null>(null);
 
-  const [kind, setKind] = useState<EventKind>("All activities");
-  const [setting, setSetting] = useState<SettingFilter>("all");
-  const [vibe, setVibe] = useState<Vibe>("all");
-  const [maxDistance, setMaxDistance] = useState<number | null>(null);
-  /** null = "today" (whichever day the current event set flags as today). */
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [sort, setSort] = useState<Sort>("recommended");
-  const [query, setQuery] = useState("");
-  const [showSaved, setShowSaved] = useState(false);
+  /**
+   * Filters and the selected day travel together as one value, so there is a
+   * single place to read them from when serializing the view into the URL.
+   * `day` is null until the visitor picks one, meaning "whichever day the
+   * current event set flags as today".
+   */
+  const [view, dispatch] = useReducer(viewReducer, DEFAULT_VIEW);
+  const { kind, setting, vibe, maxDistance, sort, query, showSaved, day: selectedDay } = view;
 
   const [saved, setSaved] = useState<string[]>([]);
   const [planItems, setPlanItems] = useState<StoredPlanItem[]>([]);
@@ -379,25 +379,9 @@ export default function Home() {
 
   /* ---- derived UI state ---- */
 
-  const activeFilters = useMemo(() => {
-    const list: { key: string; label: string; clear: () => void }[] = [];
-    if (vibe !== "all") list.push({ key: "vibe", label: moodLabel(vibe), clear: () => setVibe("all") });
-    if (kind !== "All activities") list.push({ key: "kind", label: kind, clear: () => setKind("All activities") });
-    if (setting !== "all") list.push({ key: "setting", label: setting === "indoor" ? "Indoor" : "Outdoor", clear: () => setSetting("all") });
-    if (maxDistance !== null) list.push({ key: "distance", label: `Within ${maxDistance} mi`, clear: () => setMaxDistance(null) });
-    if (showSaved) list.push({ key: "saved", label: "Saved only", clear: () => setShowSaved(false) });
-    if (query.trim()) list.push({ key: "query", label: `“${query.trim()}”`, clear: () => setQuery("") });
-    return list;
-  }, [vibe, kind, setting, maxDistance, showSaved, query]);
+  const activeFilters = useMemo(() => activeCriteria(view), [view]);
 
-  const clearAll = () => {
-    setVibe("all");
-    setKind("All activities");
-    setSetting("all");
-    setMaxDistance(null);
-    setShowSaved(false);
-    setQuery("");
-  };
+  const clearAll = () => dispatch({ type: "clearFilters" });
 
   const showSpotlight = spotlight.length > 0 && activeFilters.length === 0 && activeDay === todayKey;
   const activeDayMeta = days.find((day) => day.dateKey === activeDay);
@@ -587,12 +571,12 @@ export default function Home() {
                 <input
                   ref={searchRef}
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => dispatch({ type: "query", value: event.target.value })}
                   placeholder="Search farmers markets, live music, storytime…"
                   aria-label="Search events"
                 />
                 {query && (
-                  <button type="button" className="search-clear" onClick={() => setQuery("")} aria-label="Clear search">
+                  <button type="button" className="search-clear" onClick={() => dispatch({ type: "query", value: "" })} aria-label="Clear search">
                     <IconX />
                   </button>
                 )}
@@ -605,7 +589,7 @@ export default function Home() {
                     type="button"
                     className="mood"
                     aria-pressed={vibe === mood.id}
-                    onClick={() => setVibe(vibe === mood.id ? "all" : mood.id)}
+                    onClick={() => dispatch({ type: "vibe", value: vibe === mood.id ? "all" : mood.id })}
                   >
                     <i aria-hidden="true">{mood.icon}</i>
                     {mood.label}
@@ -748,7 +732,7 @@ export default function Home() {
                 <button
                   type="button"
                   className={setting === "indoor" ? "on" : ""}
-                  onClick={() => setSetting(setting === "indoor" ? "all" : "indoor")}
+                  onClick={() => dispatch({ type: "setting", value: setting === "indoor" ? "all" : "indoor" })}
                 >
                   {setting === "indoor" ? "Showing indoor only" : "Show indoor picks"}
                 </button>
@@ -767,7 +751,7 @@ export default function Home() {
                 type="button"
                 className="daypicker-btn"
                 aria-pressed={day.dateKey === activeDay}
-                onClick={() => setSelectedDay(day.dateKey)}
+                onClick={() => dispatch({ type: "day", value: day.dateKey })}
               >
                 <b>{day.day === "TODAY" || day.day === "TOMORROW" ? day.day : day.day.slice(0, 3)}</b>
                 <span>{day.date.replace(/^[A-Za-z]+,\s*/, "")}</span>
@@ -811,14 +795,14 @@ export default function Home() {
                 { value: "10", label: `Up to 10 mi · ~${driveMinutes(10)} min` },
                 { value: "15", label: `Up to 15 mi · ~${driveMinutes(15)} min` },
               ]}
-              onSelect={(value) => setMaxDistance(value === "any" ? null : Number(value))}
+              onSelect={(value) => dispatch({ type: "maxDistance", value: value === "any" ? null : Number(value) })}
             />
             <FilterMenu
               label="Activity"
               defaultValue="All activities"
               selected={kind}
               options={KIND_OPTIONS.map((option) => ({ value: option, label: option }))}
-              onSelect={(value) => setKind(value as EventKind)}
+              onSelect={(value) => dispatch({ type: "kind", value: value as EventKind })}
             />
             <FilterMenu
               label="Setting"
@@ -829,7 +813,7 @@ export default function Home() {
                 { value: "indoor", label: "Indoor" },
                 { value: "outdoor", label: "Outdoor" },
               ]}
-              onSelect={(value) => setSetting(value as SettingFilter)}
+              onSelect={(value) => dispatch({ type: "setting", value: value as SettingFilter })}
             />
             </div>
 
@@ -839,7 +823,7 @@ export default function Home() {
               type="button"
               className={showSaved ? "fmenu-btn on" : "fmenu-btn"}
               aria-pressed={showSaved}
-              onClick={() => setShowSaved(!showSaved)}
+              onClick={() => dispatch({ type: "showSaved", value: !showSaved })}
             >
               <IconBookmark />
               Saved
@@ -855,7 +839,7 @@ export default function Home() {
                   { value: "recommended", label: "Recommended" },
                   { value: "closest", label: "Closest first" },
                 ]}
-                onSelect={(value) => setSort(value as Sort)}
+                onSelect={(value) => dispatch({ type: "sort", value: value as Sort })}
               />
             </div>
           </div>
@@ -868,7 +852,7 @@ export default function Home() {
                 {filtered.length} {filtered.length === 1 ? "match" : "matches"}
               </span>
               {activeFilters.map((filter) => (
-                <button key={filter.key} type="button" className="chip-x" onClick={filter.clear}>
+                <button key={filter.key} type="button" className="chip-x" onClick={() => dispatch({ type: "clear", key: filter.key })}>
                   {filter.label}
                   <IconX />
                 </button>
@@ -951,8 +935,7 @@ export default function Home() {
                   type="button"
                   className="btn-solid"
                   onClick={() => {
-                    clearAll();
-                    setSelectedDay(null);
+                    dispatch({ type: "resetAll" });
                   }}
                 >
                   Clear all filters
@@ -1208,7 +1191,7 @@ export default function Home() {
                       key={String(option)}
                       type="button"
                       aria-pressed={maxDistance === option}
-                      onClick={() => setMaxDistance(option)}
+                      onClick={() => dispatch({ type: "maxDistance", value: option })}
                     >
                       {option === null ? `Up to 25 mi · ~${driveMinutes(25)} min` : `Up to ${option} mi · ~${driveMinutes(option)} min`}
                     </button>
@@ -1220,7 +1203,7 @@ export default function Home() {
                 <h4>Activity</h4>
                 <div className="sheet-chips">
                   {KIND_OPTIONS.map((option) => (
-                    <button key={option} type="button" aria-pressed={kind === option} onClick={() => setKind(option)}>
+                    <button key={option} type="button" aria-pressed={kind === option} onClick={() => dispatch({ type: "kind", value: option })}>
                       {option}
                     </button>
                   ))}
@@ -1231,7 +1214,7 @@ export default function Home() {
                 <h4>Setting</h4>
                 <div className="sheet-chips">
                   {(["all", "indoor", "outdoor"] as SettingFilter[]).map((option) => (
-                    <button key={option} type="button" aria-pressed={setting === option} onClick={() => setSetting(option)}>
+                    <button key={option} type="button" aria-pressed={setting === option} onClick={() => dispatch({ type: "setting", value: option })}>
                       {option === "all" ? "Indoor + outdoor" : option === "indoor" ? "Indoor" : "Outdoor"}
                     </button>
                   ))}
@@ -1242,7 +1225,7 @@ export default function Home() {
                 <h4>Sort</h4>
                 <div className="sheet-chips">
                   {(["recommended", "closest"] as Sort[]).map((option) => (
-                    <button key={option} type="button" aria-pressed={sort === option} onClick={() => setSort(option)}>
+                    <button key={option} type="button" aria-pressed={sort === option} onClick={() => dispatch({ type: "sort", value: option })}>
                       {option === "recommended" ? "Recommended" : "Closest first"}
                     </button>
                   ))}

@@ -176,6 +176,52 @@ export function filterEvents(
   return list;
 }
 
+/**
+ * Everything about what the visitor is currently looking at: the filters plus
+ * which day is selected (null meaning "whichever day the event set calls
+ * today").
+ *
+ * Held as one value so there is a single place to serialize from — the day and
+ * filters go into the URL together, and eight independent setters have no such
+ * place.
+ */
+export type ViewState = FilterCriteria & { day: string | null };
+
+export const DEFAULT_VIEW: ViewState = { ...DEFAULT_CRITERIA, day: null };
+
+export type ViewAction =
+  | { type: "kind"; value: EventKind }
+  | { type: "setting"; value: SettingFilter }
+  | { type: "vibe"; value: Vibe }
+  | { type: "maxDistance"; value: number | null }
+  | { type: "sort"; value: Sort }
+  | { type: "query"; value: string }
+  | { type: "showSaved"; value: boolean }
+  | { type: "day"; value: string | null }
+  /** Return one filter to its default — the removable chips above. */
+  | { type: "clear"; key: keyof FilterCriteria }
+  /** Clear every filter but stay on the selected day. */
+  | { type: "clearFilters" }
+  /** Clear the filters and go back to today. */
+  | { type: "resetAll" };
+
+export function viewReducer(state: ViewState, action: ViewAction): ViewState {
+  switch (action.type) {
+    case "clear":
+      return { ...state, [action.key]: DEFAULT_CRITERIA[action.key] };
+    case "clearFilters":
+      return { ...DEFAULT_VIEW, day: state.day };
+    case "resetAll":
+      return DEFAULT_VIEW;
+    default: {
+      // Returning the same object when nothing moved keeps re-selecting the
+      // current option from re-running the filter pass.
+      if (state[action.type] === action.value) return state;
+      return { ...state, [action.type]: action.value };
+    }
+  }
+}
+
 /** The filters a visitor has actually applied, as removable chips. */
 export function activeCriteria(criteria: FilterCriteria): { key: keyof FilterCriteria; label: string }[] {
   const list: { key: keyof FilterCriteria; label: string }[] = [];

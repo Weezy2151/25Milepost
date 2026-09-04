@@ -5,12 +5,14 @@ import {
   activeCriteria,
   buildSearchIndex,
   DEFAULT_CRITERIA,
+  DEFAULT_VIEW,
   driveMinutes,
   filterEvents,
   isFree,
   matchesVibe,
   searchText,
   settingLabel,
+  viewReducer,
 } from "../lib/filter.ts";
 
 /** A complete event, so each test can override only the field under test. */
@@ -186,4 +188,34 @@ test("activeCriteria lists only what the visitor actually changed", () => {
   );
   // Whitespace alone is not a search.
   assert.deepEqual(activeCriteria({ ...DEFAULT_CRITERIA, query: "   " }), []);
+});
+
+test("viewReducer sets, clears and resets", () => {
+  const set = (state, action) => viewReducer(state, action);
+
+  const withKind = set(DEFAULT_VIEW, { type: "kind", value: "Live music" });
+  assert.equal(withKind.kind, "Live music");
+  assert.equal(withKind.day, null, "changing a filter must not move the selected day");
+
+  const onDay = set(withKind, { type: "day", value: "2026-09-06" });
+  assert.equal(onDay.day, "2026-09-06");
+
+  // Clearing one filter leaves the others and the day alone.
+  const cleared = set(set(onDay, { type: "vibe", value: "kids" }), { type: "clear", key: "vibe" });
+  assert.equal(cleared.vibe, "all");
+  assert.equal(cleared.kind, "Live music");
+  assert.equal(cleared.day, "2026-09-06");
+
+  // "Clear all filters" keeps you on the day you were looking at...
+  const filtersCleared = set(cleared, { type: "clearFilters" });
+  assert.equal(filtersCleared.kind, "All activities");
+  assert.equal(filtersCleared.day, "2026-09-06");
+
+  // ...while the empty-state reset also returns you to today.
+  assert.deepEqual(set(cleared, { type: "resetAll" }), DEFAULT_VIEW);
+});
+
+test("viewReducer returns the same object when nothing changed", () => {
+  const state = viewReducer(DEFAULT_VIEW, { type: "kind", value: "Library" });
+  assert.equal(viewReducer(state, { type: "kind", value: "Library" }), state);
 });
