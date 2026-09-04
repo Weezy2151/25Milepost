@@ -19,10 +19,23 @@ Then open `http://localhost:3000`.
 
 ## How it works
 
-- `app/page.tsx` is the interactive events finder. It server-renders a safe
-  loading state, then refreshes itself from `/api/events` once mounted. If live
-  calendars fail, it falls back to the bundled snapshot (`app/events-data.ts`,
-  dated `SNAPSHOT_DATE`) with an explicit stale-data warning.
+- `app/page.tsx` is a server component that reads whatever the shared cache
+  already holds and hands it to `app/events-client.tsx`, the interactive events
+  finder, which refreshes itself from `/api/events` once mounted. The read is
+  cache-only: building the payload means a dozen live calendar fetches, and a
+  page render never pays for them. With a cold cache the page renders the same
+  safe loading state it always did and the client's fetch does the building.
+  If live calendars fail, the client falls back to the bundled snapshot
+  (`app/events-data.ts`, dated `SNAPSHOT_DATE`) with an explicit stale-data
+  warning; the server never renders that snapshot.
+- The page is revalidated every 15 minutes (`export const revalidate`), so the
+  HTML is CDN-cached rather than rebuilt per request. Today's listings are also
+  emitted as schema.org `Event` JSON-LD, which is what earns a place in search
+  engines' event results — the reason the listings need to be in the HTML at
+  all. **This depends on a shared cache**: with only the in-memory store the
+  page render and the API route do not share one, so the server render finds
+  nothing and falls back to the loading state. Configure Redis (see "Caching on
+  Vercel") for the server-rendered listings and their structured data.
 - `/api/weather` validates and caches Orchard Park forecasts server-side. Event
   photos use Next.js image optimization directly; the optimizer's remote-host
   allowlist is shared with the server-side URL validator, so untrusted image

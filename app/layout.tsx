@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ErrorBoundary } from "./error-boundary";
+import { siteUrl } from "../lib/site";
 
 const title = "The 25-Mile Post | Family Things To Do Near Orchard Park";
 const description =
   "A handpicked morning guide to family events happening today and this week within about 25 miles of Orchard Park, New York.";
 
-const deploymentHost = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.VERCEL_PROJECT_PRODUCTION_URL ?? "http://localhost:3000";
-const metadataBase = new URL(/^https?:\/\//.test(deploymentHost) ? deploymentHost : `https://${deploymentHost}`);
 export const metadata: Metadata = {
-  metadataBase,
+  metadataBase: siteUrl,
+  alternates: { canonical: "/" },
   title,
   description,
   openGraph: {

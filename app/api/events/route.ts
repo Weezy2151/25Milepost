@@ -3,8 +3,9 @@ import { after } from "next/server";
 import { acquireCacheLock, cacheBackendName, getCachedEntry, setCachedData } from "../../../db/cache";
 import { distanceFromOrigin, extractTown, ORIGIN } from "../../../lib/geo";
 import { describe, resolveImages } from "../../../lib/enrich";
-import { eventsPayloadSchema, liveEventSchema, type EventKind, type EventsPayload, type EventSetting, type LiveEvent, type RawEvent, type SourceHealth } from "../../../lib/events";
+import { liveEventSchema, type EventKind, type EventsPayload, type EventSetting, type LiveEvent, type RawEvent, type SourceHealth } from "../../../lib/events";
 import { parseEventTime } from "../../../lib/time";
+import { cacheKeyFor, cachedFreshness, LAST_GOOD_KEY, validPayload, withFreshness } from "../../../lib/events-cache";
 import { EVENTS_HEALTH_KEY, healthSnapshotSchema, type HealthSnapshot } from "../../../lib/health";
 import { parseIcalOccurrences } from "../../../lib/ical";
 import { assertSafePublicUrl, EVENT_IMAGE_HOSTS, fetchPublicText } from "../../../lib/safe-fetch";
@@ -1432,25 +1433,7 @@ const DEGRADED_CACHE_CONTROL = {
   vercel: "public, max-age=60",
 };
 
-function cacheKeyFor(todayKey: string) {
-  return `events:balanced-v11:${todayKey}`;
-}
-
-/**
- * Date-independent key for the newest payload that ever built successfully.
- *
- * The per-day key expires with its day, so the first reader on a morning when
- * every feed is down used to fall all the way through to the bundled snapshot
- * — a hardcoded copy from months ago. Yesterday's real listings are wrong
- * about which day it is; the snapshot is wrong about everything.
- */
-const LAST_GOOD_KEY = "events:balanced-v11:last-good";
 const REFRESH_LOCK_SECONDS = maxDuration + 5;
-
-function validPayload(value: unknown): EventsPayload | null {
-  const parsed = eventsPayloadSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
 
 function responseHeaders(payload: EventsPayload, cacheStatus: string) {
   const controls = payload.freshness.state !== "fresh"
@@ -1487,19 +1470,6 @@ async function recordSourceHealth(sources: SourceHealth[], builtFor: string) {
   } catch (error) {
     console.error("[events] failed to persist source health", error);
   }
-}
-
-function withFreshness(
-  payload: EventsPayload,
-  state: EventsPayload["freshness"]["state"],
-  ageSeconds: number,
-): EventsPayload {
-  return { ...payload, freshness: { ...payload.freshness, state, ageSeconds, store: cacheBackendName() } };
-}
-
-function cachedFreshness(payload: EventsPayload, stale: boolean): EventsPayload["freshness"]["state"] {
-  if (payload.freshness.state === "last-good") return "last-good";
-  return stale ? "stale" : payload.freshness.state;
 }
 
 /**

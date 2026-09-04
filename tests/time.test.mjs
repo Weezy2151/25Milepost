@@ -9,6 +9,7 @@ import {
   minutesUntil,
   parseEventTime,
   parseStartMinutes,
+  zonedTodayKey,
 } from "../lib/time.ts";
 
 const at = (hour, minute = 0) => hour * 60 + minute;
@@ -140,4 +141,13 @@ test("localDateKey reports the local date, not the UTC one", () => {
   assert.equal(localDateKey(lateEvening), "2026-09-04");
   assert.equal(localDateKey(new Date(2026, 0, 1, 0, 5)), "2026-01-01");
   assert.equal(localDateKey(new Date(2026, 11, 31, 12)), "2026-12-31");
+});
+
+test("zonedTodayKey answers for Orchard Park, not for the machine's timezone", () => {
+  // 01:30 UTC is still the previous evening in Eastern time. A server in UTC
+  // must not start asking for tomorrow's listings at 8pm local.
+  assert.equal(zonedTodayKey(new Date("2026-09-05T01:30:00Z")), "2026-09-04");
+  assert.equal(zonedTodayKey(new Date("2026-09-04T16:00:00Z")), "2026-09-04");
+  // And just after midnight Eastern it has rolled over.
+  assert.equal(zonedTodayKey(new Date("2026-09-05T04:30:00Z")), "2026-09-05");
 });

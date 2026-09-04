@@ -177,6 +177,24 @@ export function nowMinutes(date = new Date()) {
   return date.getHours() * 60 + date.getMinutes();
 }
 
+/** The one timezone this app covers; every event date is anchored to it. */
+export const ZONE = "America/New_York";
+
+const ZONED_DATE = new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
+
+/**
+ * Today's date key in Orchard Park, whatever timezone the machine is in.
+ *
+ * The API keys its cache by this, so a server render that wants the same
+ * entry must ask the same question. A server running in UTC would otherwise
+ * start looking up tomorrow's listings at 8pm Eastern and find nothing.
+ * Browsers should use localDateKey() instead — there, local time is the
+ * visitor's own and that is the right answer.
+ */
+export function zonedTodayKey(date = new Date()) {
+  return ZONED_DATE.format(date);
+}
+
 /**
  * Today's date as the `YYYY-MM-DD` key the events use, in local time.
  *
