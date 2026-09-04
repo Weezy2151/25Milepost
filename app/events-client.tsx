@@ -10,6 +10,9 @@ import { fallbackEvents } from "./events-data";
 import {
   activeCriteria,
   buildSearchIndex,
+  matchesDaySelection,
+  weekendKeys,
+  WEEKEND,
   DEFAULT_VIEW,
   resolveSort,
   eventMinutes,
@@ -321,6 +324,9 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
    * fine for choosing where to land, but nothing may claim to be happening
    * "now" on the strength of it.
    */
+  /** Saturday and Sunday among the days on offer, for the weekend tile. */
+  const weekendSet = useMemo(() => new Set(weekendKeys(days.map((day) => day.dateKey))), [days]);
+  const viewingWeekend = activeDay === WEEKEND;
   const viewingToday = realTodayKey !== null && activeDay === realTodayKey;
 
   /**
@@ -355,7 +361,10 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
     return counts;
   }, [baseFiltered]);
 
-  const filtered = useMemo(() => baseFiltered.filter((event) => event.dateKey === activeDay), [baseFiltered, activeDay]);
+  const filtered = useMemo(
+    () => baseFiltered.filter((event) => matchesDaySelection(event, activeDay, weekendSet)),
+    [baseFiltered, activeDay, weekendSet],
+  );
 
   /**
    * On today, split what is still to come from what has already been. An
@@ -364,14 +373,34 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
    * behind a disclosure rather than out of the page.
    */
   const [upcoming, earlier] = useMemo(() => {
-    if (!viewingToday || clock === null) return [filtered, [] as EventPick[]];
+    if (clock === null || realTodayKey === null) return [filtered, [] as EventPick[]];
     const ahead: EventPick[] = [];
     const past: EventPick[] = [];
     for (const event of filtered) {
-      (eventStatus(eventMinutes(event), clock) === "past" ? past : ahead).push(event);
+      // Judged per event, not per view: a weekend selection can include today.
+      const isToday = event.dateKey === realTodayKey;
+      (isToday && eventStatus(eventMinutes(event), clock) === "past" ? past : ahead).push(event);
     }
     return [ahead, past];
-  }, [filtered, viewingToday, clock]);
+  }, [filtered, clock, realTodayKey]);
+
+  /** The weekend covers two days, so its results are grouped under each. */
+  const resultGroups = useMemo(() => {
+    if (!viewingWeekend) return [{ key: "", label: "", events: upcoming }];
+    const byDay = new Map<string, EventPick[]>();
+    for (const event of upcoming) {
+      if (!event.dateKey) continue;
+      const group = byDay.get(event.dateKey);
+      if (group) group.push(event);
+      else byDay.set(event.dateKey, [event]);
+    }
+    return [...byDay.keys()].sort().map((key) => ({
+      key,
+      label: new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "long", month: "short", day: "numeric" })
+        .format(new Date(`${key}T12:00:00Z`)),
+      events: byDay.get(key)!,
+    }));
+  }, [viewingWeekend, upcoming]);
 
   const [showEarlier, setShowEarlier] = useState(false);
 
@@ -389,13 +418,15 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
    * the site had nothing at all.
    */
   const otherDays = useMemo(() => {
-    const { groups, total } = groupOtherDays(baseFiltered, activeDay);
+    const shown = viewingWeekend ? weekendSet : new Set([activeDay]);
+    const elsewhere = baseFiltered.filter((event) => !event.dateKey || !shown.has(event.dateKey));
+    const { groups, total } = groupOtherDays(elsewhere, "");
     const labelled = groups.flatMap((group) => {
       const meta = days.find((day) => day.dateKey === group.dateKey);
       return meta ? [{ ...meta, events: group.events }] : [];
     });
     return { groups: labelled, total };
-  }, [baseFiltered, activeDay, days]);
+  }, [baseFiltered, activeDay, days, viewingWeekend, weekendSet]);
 
   /**
    * How current the listings are, shown on each card.
@@ -436,8 +467,10 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
    * Saturday. Everything weather-facing below reads this instead.
    */
   const dayForecast = useMemo(
-    () => dayWeather.get(activeDay) ?? null,
-    [dayWeather, activeDay],
+    // The weekend covers two days, so the card shows the first of them rather
+    // than claiming one forecast speaks for both.
+    () => dayWeather.get(viewingWeekend ? ([...weekendSet].sort()[0] ?? "") : activeDay) ?? null,
+    [dayWeather, activeDay, viewingWeekend, weekendSet],
   );
 
   /* ---- actions ---- */
@@ -633,6 +666,7 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
           activeDay={activeDay}
           dayCounts={dayCounts}
           dayWeather={dayWeather}
+          weekendKeys={weekendSet}
           onSelect={(dateKey) => dispatch({ type: "day", value: dateKey })}
         />
         {/* ----------------------------------------------------- filter bar */}
@@ -648,12 +682,18 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
         {/* ------------------------------------------------------ spotlight */}
         {showSpotlight && <Spotlight spotlight={spotlight} onOpen={openEvent} />}
         {/* -------------------------------------------------------- results */}
-        <section className="wrap section" id="results" tabIndex={-1} aria-label={`Events on ${activeDayMeta?.date ?? "the selected day"}`}>
+        <section className="wrap section" id="results" tabIndex={-1} aria-label={viewingWeekend ? "Events this weekend" : `Events on ${activeDayMeta?.date ?? "the selected day"}`}>
           <div className="section-head">
             <div>
-              <p className="eyebrow">{viewingToday ? "Today" : "Plan ahead"}</p>
+              <p className="eyebrow">{viewingToday ? "Today" : viewingWeekend ? "Saturday and Sunday" : "Plan ahead"}</p>
               <h2 className="display">
-                {activeDayMeta ? (activeDayMeta.day === "TODAY" || activeDayMeta.day === "TOMORROW" ? activeDayMeta.day[0] + activeDayMeta.day.slice(1).toLowerCase() : activeDayMeta.date) : "This week"}
+                {viewingWeekend
+                  ? "This weekend"
+                  : activeDayMeta
+                    ? (activeDayMeta.day === "TODAY" || activeDayMeta.day === "TOMORROW"
+                        ? activeDayMeta.day[0] + activeDayMeta.day.slice(1).toLowerCase()
+                        : activeDayMeta.date)
+                    : "This week"}
               </h2>
             </div>
             <p className="count">
@@ -663,24 +703,29 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
 
           {filtered.length ? (
             <>
-              {upcoming.length > 0 && (
-                <div className="grid">
-                  {upcoming.map((event) => (
-                    <EventCard
-                      key={event.id}
-                      event={event}
-                      isSaved={savedSet.has(event.id)}
-                      inPlan={planIds.has(event.id)}
-                      forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
-                      nowMinutes={viewingToday ? clock : null}
-                      checkedLabel={checkedLabel}
-                      onToggleSave={toggleSave}
-                      onTogglePlan={togglePlan}
-                      onOpen={openEvent}
-                    />
-                  ))}
-                </div>
-              )}
+              {resultGroups.map((group) => (
+                group.events.length > 0 && (
+                  <div key={group.key || "all"}>
+                    {group.label && <h3 className="daygroup">{group.label}</h3>}
+                    <div className="grid">
+                      {group.events.map((event) => (
+                        <EventCard
+                          key={event.id}
+                          event={event}
+                          isSaved={savedSet.has(event.id)}
+                          inPlan={planIds.has(event.id)}
+                          forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
+                          nowMinutes={event.dateKey === realTodayKey ? clock : null}
+                          checkedLabel={checkedLabel}
+                          onToggleSave={toggleSave}
+                          onTogglePlan={togglePlan}
+                          onOpen={openEvent}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )
+              ))}
 
               {earlier.length > 0 && (
                 <div className="earlier">
@@ -698,7 +743,7 @@ export function EventsClient({ initialPayload }: { initialPayload: EventsPayload
                           isSaved={savedSet.has(event.id)}
                           inPlan={planIds.has(event.id)}
                           forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
-                          nowMinutes={viewingToday ? clock : null}
+                          nowMinutes={event.dateKey === realTodayKey ? clock : null}
                           checkedLabel={checkedLabel}
                           onToggleSave={toggleSave}
                           onTogglePlan={togglePlan}

@@ -2,6 +2,7 @@
 
 import { useRef } from "react";
 
+import { WEEKEND } from "../../lib/filter";
 import type { DayForecast } from "../../lib/weather";
 import { weatherEmoji } from "../../lib/weather";
 
@@ -13,31 +14,38 @@ export function DayPicker({
   activeDay,
   dayCounts,
   dayWeather,
+  weekendKeys,
   onSelect,
 }: {
   days: DayTile[];
   activeDay: string;
   dayCounts: Map<string, number>;
   dayWeather: Map<string, DayForecast>;
+  /** Saturday and Sunday among the days on offer. */
+  weekendKeys: ReadonlySet<string>;
   onSelect: (dateKey: string) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
 
   /** Arrow keys move along the week; Home and End jump to its ends. */
+  // "This weekend" sits at the end of the row and is selectable like any day.
+  const options = weekendKeys.size > 0 ? [...days.map((day) => day.dateKey), WEEKEND] : days.map((day) => day.dateKey);
+  const weekendCount = [...weekendKeys].reduce((total, key) => total + (dayCounts.get(key) ?? 0), 0);
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
     if (!keys.includes(event.key)) return;
-    const index = days.findIndex((day) => day.dateKey === activeDay);
+    const index = options.indexOf(activeDay);
     if (index === -1) return;
     event.preventDefault();
 
     const step = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
     const next =
       event.key === "Home" ? 0
-      : event.key === "End" ? days.length - 1
-      : (index + step + days.length) % days.length;
+      : event.key === "End" ? options.length - 1
+      : (index + step + options.length) % options.length;
 
-    onSelect(days[next].dateKey);
+    onSelect(options[next]);
     // Move focus with the selection, as a radio group does.
     listRef.current?.querySelectorAll("button")[next]?.focus();
   };
@@ -73,6 +81,21 @@ export function DayPicker({
             <em>{dayCounts.get(day.dateKey) ?? 0}</em>
           </button>
         ))}
+
+        {weekendKeys.size > 0 && (
+          <button
+            type="button"
+            className="daypicker-btn daypicker-weekend"
+            role="radio"
+            aria-checked={activeDay === WEEKEND}
+            tabIndex={activeDay === WEEKEND ? 0 : -1}
+            onClick={() => onSelect(WEEKEND)}
+          >
+            <b>WEEKEND</b>
+            <span>Sat + Sun</span>
+            <em>{weekendCount}</em>
+          </button>
+        )}
       </div>
     </section>
   );

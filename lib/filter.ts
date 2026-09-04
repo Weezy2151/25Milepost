@@ -231,7 +231,32 @@ export function filterEvents(
  * filters go into the URL together, and eight independent setters have no such
  * place.
  */
-export type ViewState = FilterCriteria & { day: string | null };
+/**
+ * Which day the results cover: a date, the literal "weekend", or null for
+ * "whichever day the event set calls today".
+ *
+ * The question people actually arrive with is often "what is on this weekend"
+ * rather than any single date, so it is a selection the picker can offer
+ * alongside the days themselves.
+ */
+export const WEEKEND = "weekend";
+export type DaySelection = string | null;
+
+export type ViewState = FilterCriteria & { day: DaySelection };
+
+/** Saturday and Sunday among the days currently on offer. */
+export function weekendKeys(dateKeys: string[]): string[] {
+  return dateKeys.filter((key) => {
+    const weekday = new Date(`${key}T12:00:00Z`).getUTCDay();
+    return weekday === 0 || weekday === 6;
+  });
+}
+
+/** Whether an event belongs to the day (or weekend) currently selected. */
+export function matchesDaySelection(event: EventPick, selection: string, weekend: ReadonlySet<string>) {
+  if (!event.dateKey) return false;
+  return selection === WEEKEND ? weekend.has(event.dateKey) : event.dateKey === selection;
+}
 
 export const DEFAULT_VIEW: ViewState = { ...DEFAULT_CRITERIA, day: null };
 

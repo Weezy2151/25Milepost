@@ -1506,3 +1506,15 @@ button { margin: 0; background: none; cursor: pointer; }
 .itin-summary { margin: 0; color: var(--text-3); font: 600 12.5px/1.4 var(--sans); }
 
 .itin-route { align-self: flex-start; }
+
+/* A day's heading inside a multi-day view, such as the weekend. */
+.daygroup {
+  margin: 4px 0 12px;
+  color: var(--text-2);
+  font: 800 12px/1 var(--sans);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.daygroup:not(:first-child) { margin-top: 26px; }
+
+.daypicker-weekend b { letter-spacing: 0.04em; }

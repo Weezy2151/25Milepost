@@ -21,6 +21,7 @@ import {
   type Sort,
   type ViewState,
   type Vibe,
+  WEEKEND,
 } from "./filter.ts";
 
 /** Query-string names, kept short and readable in a shared link. */
@@ -65,7 +66,7 @@ export function viewFromParams(params: URLSearchParams): ViewState {
   const view: ViewState = { ...DEFAULT_VIEW };
 
   const day = params.get(PARAM.day);
-  if (day && DATE_KEY.test(day)) view.day = day;
+  if (day && (DATE_KEY.test(day) || day === WEEKEND)) view.day = day;
 
   const kind = params.get(PARAM.kind);
   if (kind && (KIND_OPTIONS as string[]).includes(kind)) view.kind = kind as EventKind;

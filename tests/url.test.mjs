@@ -44,6 +44,12 @@ test("every view survives a round trip through the URL", () => {
   assert.deepEqual(roundTrip(DEFAULT_VIEW), DEFAULT_VIEW);
 });
 
+test("the weekend is a day selection the URL can carry", () => {
+  assert.equal(params({ ...DEFAULT_VIEW, day: "weekend" }), "day=weekend");
+  assert.equal(viewFromParams(new URLSearchParams("day=weekend")).day, "weekend");
+  assert.equal(viewFromParams(new URLSearchParams("day=whenever")).day, null);
+});
+
 test("junk in the address bar is ignored rather than trusted", () => {
   const view = viewFromParams(
     new URLSearchParams({

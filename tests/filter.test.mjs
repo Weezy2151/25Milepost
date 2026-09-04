@@ -10,8 +10,10 @@ import {
   filterEvents,
   groupOtherDays,
   isFree,
+  matchesDaySelection,
   matchesVibe,
   resolveSort,
+  weekendKeys,
   searchText,
   settingLabel,
   viewReducer,
@@ -290,4 +292,25 @@ test("groupOtherDays ignores events with no date", () => {
   const { groups, total } = groupOtherDays(events, "2026-09-04");
   assert.equal(total, 1);
   assert.deepEqual(groups[0].events.map((event) => event.id), ["dated"]);
+});
+
+test("weekendKeys picks out Saturday and Sunday", () => {
+  // 2026-09-04 is a Friday.
+  const week = ["2026-09-04", "2026-09-05", "2026-09-06", "2026-09-07", "2026-09-08"];
+  assert.deepEqual(weekendKeys(week), ["2026-09-05", "2026-09-06"]);
+  assert.deepEqual(weekendKeys(["2026-09-07", "2026-09-08"]), [], "a midweek stretch has no weekend");
+});
+
+test("a weekend selection matches either of its days", () => {
+  const weekend = new Set(["2026-09-05", "2026-09-06"]);
+  const saturday = makeEvent({ dateKey: "2026-09-05" });
+  const monday = makeEvent({ dateKey: "2026-09-07" });
+
+  assert.equal(matchesDaySelection(saturday, "weekend", weekend), true);
+  assert.equal(matchesDaySelection(monday, "weekend", weekend), false);
+  // A single date still matches only itself.
+  assert.equal(matchesDaySelection(saturday, "2026-09-05", weekend), true);
+  assert.equal(matchesDaySelection(saturday, "2026-09-06", weekend), false);
+  // An undated event belongs to no selection.
+  assert.equal(matchesDaySelection(makeEvent({ dateKey: undefined }), "weekend", weekend), false);
 });
