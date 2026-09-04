@@ -5,6 +5,8 @@ import type { Dispatch, RefObject } from "react";
 import {
   driveMinutes,
   KIND_OPTIONS,
+  resolveSort,
+  SORT_LABELS,
   type SettingFilter,
   type Sort,
   type ViewAction,
@@ -18,6 +20,7 @@ export function FilterSheet({
   dispatch,
   activeCount,
   resultCount,
+  viewingToday,
   sheetRef,
   onClose,
   onClearAll,
@@ -26,11 +29,13 @@ export function FilterSheet({
   dispatch: Dispatch<ViewAction>;
   activeCount: number;
   resultCount: number;
+  viewingToday: boolean;
   sheetRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   onClearAll: () => void;
 }) {
   const { kind, setting, sort, maxDistance } = view;
+  const resolvedSort = resolveSort(sort, viewingToday);
 
   return (
       <div className="scrim bottom">
@@ -86,9 +91,9 @@ export function FilterSheet({
             <div className="sheet-group">
               <h4>Sort</h4>
               <div className="sheet-chips">
-                {(["recommended", "closest"] as Sort[]).map((option) => (
-                  <button key={option} type="button" aria-pressed={sort === option} onClick={() => dispatch({ type: "sort", value: option })}>
-                    {option === "recommended" ? "Recommended" : "Closest first"}
+                {(["soonest", "recommended", "closest"] as Exclude<Sort, "auto">[]).map((option) => (
+                  <button key={option} type="button" aria-pressed={resolvedSort === option} onClick={() => dispatch({ type: "sort", value: option })}>
+                    {SORT_LABELS[option]}
                   </button>
                 ))}
               </div>

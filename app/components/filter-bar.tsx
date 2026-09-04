@@ -5,6 +5,8 @@ import type { Dispatch } from "react";
 import {
   activeCriteria,
   driveMinutes,
+  resolveSort,
+  SORT_LABELS,
   KIND_OPTIONS,
   type EventKind,
   type SettingFilter,
@@ -27,6 +29,7 @@ export function FilterBar({
   dispatch,
   savedCount,
   resultCount,
+  viewingToday,
   onOpenSheet,
   onClearAll,
 }: {
@@ -34,11 +37,14 @@ export function FilterBar({
   dispatch: Dispatch<ViewAction>;
   savedCount: number;
   resultCount: number;
+  viewingToday: boolean;
   onOpenSheet: () => void;
   onClearAll: () => void;
 }) {
   const { kind, setting, sort, maxDistance, showSaved } = view;
   const activeFilters = activeCriteria(view);
+  // The menu shows what the list is actually ordered by, not the word "auto".
+  const resolvedSort = resolveSort(sort, viewingToday);
 
   return (
     <>
@@ -103,11 +109,12 @@ export function FilterBar({
             <FilterMenu
               label="Sort"
               align="right"
-              defaultValue="recommended"
-              selected={sort}
+              defaultValue={resolvedSort}
+              selected={resolvedSort}
               options={[
-                { value: "recommended", label: "Recommended" },
-                { value: "closest", label: "Closest first" },
+                { value: "soonest", label: SORT_LABELS.soonest },
+                { value: "recommended", label: SORT_LABELS.recommended },
+                { value: "closest", label: SORT_LABELS.closest },
               ]}
               onSelect={(value) => dispatch({ type: "sort", value: value as Sort })}
             />

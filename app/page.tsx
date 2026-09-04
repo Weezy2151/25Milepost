@@ -4,11 +4,14 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useReducer, useRef, 
 import { parseEventsPayload, parseStoredIds, parseStoredPlan, parseWeatherPayload, type StoredPlanItem } from "../lib/client-data";
 import type { Freshness } from "../lib/events";
 import type { Weather } from "../lib/weather";
+import { eventStatus, nowMinutes } from "../lib/time";
 import { fallbackEvents } from "./events-data";
 import {
   activeCriteria,
   buildSearchIndex,
   DEFAULT_VIEW,
+  resolveSort,
+  eventMinutes,
   filterEvents,
   isFree,
   viewReducer,
@@ -24,7 +27,7 @@ import { Hero } from "./components/hero";
 import { MyDayDrawer } from "./components/my-day-drawer";
 import { Sources } from "./components/sources";
 import { Spotlight } from "./components/spotlight";
-import { IconMoon, IconRoute, IconSearch, IconShare, IconSun, IconX } from "./components/icons";
+import { IconChevron, IconMoon, IconRoute, IconSearch, IconShare, IconSun, IconX } from "./components/icons";
 import { useModal } from "./components/use-modal";
 
 /* -------------------------------------------------------------- home page */
@@ -156,6 +159,21 @@ export default function Home() {
     if (theme) document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
+  /**
+   * Local time as minutes past midnight, refreshed each minute.
+   *
+   * Null until it is read after mount, so the server and the first client pass
+   * render the same markup — a card cannot say "happening now" in HTML that
+   * was generated hours earlier.
+   */
+  const [clock, setClock] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setClock(nowMinutes());
+    tick();
+    const timer = window.setInterval(tick, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(""), 3600);
@@ -165,22 +183,6 @@ export default function Home() {
   /* ---- filtering ---- */
 
   const searchableEvents = useMemo(() => buildSearchIndex(events), [events]);
-
-  /**
-   * Every filter except which day is selected — used both for the results list
-   * and to count how many events each day tab would show, so the two can never
-   * disagree. The rules themselves live in `lib/filter.ts`, where they are
-   * unit-tested.
-   */
-  const criteria: FilterCriteria = useMemo(
-    () => ({ kind, setting, vibe, maxDistance, sort, query: deferredQuery, showSaved }),
-    [kind, setting, vibe, maxDistance, sort, deferredQuery, showSaved],
-  );
-
-  const baseFiltered = useMemo(
-    () => filterEvents(searchableEvents, criteria, savedSet),
-    [searchableEvents, criteria, savedSet],
-  );
 
   /** The week's days in order, one tile per distinct date the current event set covers. */
   const days = useMemo(() => {
@@ -203,6 +205,31 @@ export default function Home() {
   const todayKey = useMemo(() => events.find((event) => event.today)?.dateKey ?? days[0]?.dateKey ?? "", [events, days]);
   const activeDay = selectedDay ?? todayKey;
 
+  const viewingToday = activeDay === todayKey;
+
+  /**
+   * "auto" means chronological while you are looking at today, where the next
+   * thing on is the useful answer, and the editorial order for a day you are
+   * planning ahead for. An explicit choice is always honoured.
+   */
+  const resolvedSort = resolveSort(sort, viewingToday);
+
+  /**
+   * Every filter except which day is selected — used both for the results list
+   * and to count how many events each day tab would show, so the two can never
+   * disagree. The rules themselves live in `lib/filter.ts`, where they are
+   * unit-tested.
+   */
+  const criteria: FilterCriteria = useMemo(
+    () => ({ kind, setting, vibe, maxDistance, sort: resolvedSort, query: deferredQuery, showSaved }),
+    [kind, setting, vibe, maxDistance, resolvedSort, deferredQuery, showSaved],
+  );
+
+  const baseFiltered = useMemo(
+    () => filterEvents(searchableEvents, criteria, savedSet),
+    [searchableEvents, criteria, savedSet],
+  );
+
   const dayCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const event of baseFiltered) {
@@ -213,6 +240,24 @@ export default function Home() {
   }, [baseFiltered]);
 
   const filtered = useMemo(() => baseFiltered.filter((event) => event.dateKey === activeDay), [baseFiltered, activeDay]);
+
+  /**
+   * On today, split what is still to come from what has already been. An
+   * event you have missed is not a suggestion, but it is still worth being
+   * able to see — a festival you thought started later, say — so it moves
+   * behind a disclosure rather than out of the page.
+   */
+  const [upcoming, earlier] = useMemo(() => {
+    if (!viewingToday || clock === null) return [filtered, [] as EventPick[]];
+    const ahead: EventPick[] = [];
+    const past: EventPick[] = [];
+    for (const event of filtered) {
+      (eventStatus(eventMinutes(event), clock) === "past" ? past : ahead).push(event);
+    }
+    return [ahead, past];
+  }, [filtered, viewingToday, clock]);
+
+  const [showEarlier, setShowEarlier] = useState(false);
 
   const spotlight = useMemo(() => events.filter((event) => (event.priority ?? 0) >= 8).slice(0, 3), [events]);
 
@@ -240,7 +285,6 @@ export default function Home() {
     () => dayWeather.get(activeDay) ?? null,
     [dayWeather, activeDay],
   );
-  const viewingToday = activeDay === todayKey;
   const rainLikely = dayForecast !== null && dayForecast.rain >= 40;
 
   /* ---- actions ---- */
@@ -431,6 +475,7 @@ export default function Home() {
           dispatch={dispatch}
           savedCount={saved.length}
           resultCount={filtered.length}
+          viewingToday={viewingToday}
           onOpenSheet={() => setSheetOpen(true)}
           onClearAll={clearAll}
         />
@@ -451,20 +496,52 @@ export default function Home() {
           </div>
 
           {filtered.length ? (
-            <div className="grid">
-              {filtered.map((event) => (
-                <EventCard
-                  key={event.id}
-                  event={event}
-                  isSaved={savedSet.has(event.id)}
-                  inPlan={planIds.has(event.id)}
-                  forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
-                  onToggleSave={toggleSave}
-                  onTogglePlan={togglePlan}
-                  onOpen={setSelected}
-                />
-              ))}
-            </div>
+            <>
+              {upcoming.length > 0 && (
+                <div className="grid">
+                  {upcoming.map((event) => (
+                    <EventCard
+                      key={event.id}
+                      event={event}
+                      isSaved={savedSet.has(event.id)}
+                      inPlan={planIds.has(event.id)}
+                      forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
+                      nowMinutes={viewingToday ? clock : null}
+                      onToggleSave={toggleSave}
+                      onTogglePlan={togglePlan}
+                      onOpen={setSelected}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {earlier.length > 0 && (
+                <div className="earlier">
+                  <button type="button" className="earlier-toggle" aria-expanded={showEarlier} onClick={() => setShowEarlier(!showEarlier)}>
+                    <IconChevron />
+                    {showEarlier ? "Hide" : "Show"} {earlier.length} earlier {earlier.length === 1 ? "event" : "events"}
+                    {upcoming.length === 0 && " — everything today has already started"}
+                  </button>
+                  {showEarlier && (
+                    <div className="grid">
+                      {earlier.map((event) => (
+                        <EventCard
+                          key={event.id}
+                          event={event}
+                          isSaved={savedSet.has(event.id)}
+                          inPlan={planIds.has(event.id)}
+                          forecast={event.dateKey && event.setting !== "indoor" ? dayWeather.get(event.dateKey) ?? null : null}
+                          nowMinutes={clock}
+                          onToggleSave={toggleSave}
+                          onTogglePlan={togglePlan}
+                          onOpen={setSelected}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           ) : (
             <div className="empty">
               <h3>Nothing that day matches those filters</h3>
@@ -538,6 +615,7 @@ export default function Home() {
           dispatch={dispatch}
           activeCount={activeFilters.length}
           resultCount={filtered.length}
+          viewingToday={viewingToday}
           sheetRef={sheetRef}
           onClose={closeSheet}
           onClearAll={clearAll}

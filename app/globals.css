@@ -928,6 +928,42 @@ button { margin: 0; background: none; cursor: pointer; }
 }
 .flag.today { background: var(--accent); color: var(--accent-ink); }
 
+/* An event under way right now, and one about to start. */
+.flag.live { background: var(--good); color: #fff; }
+.flag.live .live-dot { width: 6px; height: 6px; background: #fff; box-shadow: none; animation: pulse 1.6s ease-in-out infinite; }
+.flag.soon { background: var(--warn); color: #fff; }
+
+/*
+ * An event whose start has already passed. It stays legible — it is shown
+ * only behind a disclosure, where a visitor has asked to see it.
+ */
+.card.is-past { opacity: 0.66; }
+.card.is-past:hover, .card.is-past:focus-within { opacity: 1; }
+
+.earlier { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
+
+.earlier-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font: 700 12.5px/1 var(--sans);
+  cursor: pointer;
+}
+.earlier-toggle:hover { color: var(--text); border-color: var(--line-strong, var(--line)); }
+.earlier-toggle svg { width: 13px; height: 13px; transition: transform 0.15s ease; }
+.earlier-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .flag.live .live-dot { animation: none; }
+  .earlier-toggle svg { transition: none; }
+}
+
 .card-body { display: flex; flex-direction: column; gap: 8px; padding: 16px 17px 14px; flex: 1; }
 
 .card-when {

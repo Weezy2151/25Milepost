@@ -14,7 +14,23 @@ import { parseEventTime, parseStartMinutes } from "./time.ts";
 export type EventKind = "All activities" | ActivityKind;
 export type SettingFilter = "all" | "indoor" | "outdoor";
 export type Vibe = "all" | "outside" | "kids" | "food" | "evening" | "rain" | "drive";
-export type Sort = "recommended" | "closest";
+/**
+ * How the results are ordered. "auto" is the default: chronological while you
+ * are looking at today, where the next thing on is the useful answer, and the
+ * editorial order for a day you are planning ahead for.
+ */
+export type Sort = "auto" | "recommended" | "closest" | "soonest";
+
+export const SORT_LABELS: Record<Exclude<Sort, "auto">, string> = {
+  recommended: "Our picks",
+  soonest: "Starting soonest",
+  closest: "Closest first",
+};
+
+export function resolveSort(sort: Sort, viewingToday: boolean): Exclude<Sort, "auto"> {
+  if (sort !== "auto") return sort;
+  return viewingToday ? "soonest" : "recommended";
+}
 
 type OptionalLiveFields = "dateKey" | "kind" | "setting" | "priority" | "lat" | "lon" | "distancePrecision" | "startMinutes" | "endMinutes";
 /** Fallback snapshots predate the normalized live contract, so enrichment fields remain optional only here. */
@@ -155,7 +171,7 @@ export const DEFAULT_CRITERIA: FilterCriteria = {
   setting: "all",
   vibe: "all",
   maxDistance: null,
-  sort: "recommended",
+  sort: "auto",
   query: "",
   showSaved: false,
 };
@@ -187,6 +203,18 @@ export function filterEvents(
     list.push(event);
   }
   if (criteria.sort === "closest") return [...list].sort((a, b) => a.distance - b.distance);
+  if (criteria.sort === "soonest") {
+    // A listing with no readable clock keeps its place at the end rather than
+    // being treated as midnight and jumping to the front of the day.
+    return [...list].sort((a, b) => {
+      const left = eventMinutes(a).startMinutes;
+      const right = eventMinutes(b).startMinutes;
+      if (left === right) return 0;
+      if (left === null) return 1;
+      if (right === null) return -1;
+      return left - right;
+    });
+  }
   return list;
 }
 

@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatMinutes, parseEventTime, parseStartMinutes } from "../lib/time.ts";
+import {
+  eventStatus,
+  formatCountdown,
+  formatMinutes,
+  minutesUntil,
+  parseEventTime,
+  parseStartMinutes,
+} from "../lib/time.ts";
 
 const at = (hour, minute = 0) => hour * 60 + minute;
 
@@ -95,4 +102,33 @@ test("reads a start time out of every timed event the iCalendar fixture produces
       assert.notEqual(startMinutes, null, `timed event should yield a start: ${event.time}`);
     }
   }
+});
+
+test("eventStatus places an event before, during or after now", () => {
+  const noon = at(12);
+  const window = { startMinutes: at(11), endMinutes: at(13) };
+  assert.equal(eventStatus(window, at(10)), "upcoming");
+  assert.equal(eventStatus(window, at(11)), "now");
+  assert.equal(eventStatus(window, noon), "now");
+  assert.equal(eventStatus(window, at(13)), "now", "an event is still on at its closing minute");
+  assert.equal(eventStatus(window, at(13, 1)), "past");
+  assert.equal(eventStatus({ startMinutes: null, endMinutes: null }, noon), "unknown");
+});
+
+test("eventStatus gives an event with no stated end the benefit of the doubt", () => {
+  const openEnded = { startMinutes: at(10, 30), endMinutes: null };
+  assert.equal(eventStatus(openEnded, at(10, 45)), "now");
+  // Still counted as running an hour and a half past its start...
+  assert.equal(eventStatus(openEnded, at(12)), "now");
+  // ...but not beyond that.
+  assert.equal(eventStatus(openEnded, at(12, 1)), "past");
+});
+
+test("minutesUntil and formatCountdown describe the wait", () => {
+  assert.equal(minutesUntil(at(14), at(12)), 120);
+  assert.equal(minutesUntil(at(12), at(12)), null, "an event under way is not counted down to");
+  assert.equal(minutesUntil(null, at(12)), null);
+  assert.equal(formatCountdown(25), "in 25 min");
+  assert.equal(formatCountdown(60), "in 1 hr");
+  assert.equal(formatCountdown(135), "in 2 hr 15 min");
 });

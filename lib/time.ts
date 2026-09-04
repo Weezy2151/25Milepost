@@ -133,3 +133,46 @@ export function formatMinutes(minutes: number): string {
   const hour = hour24 % 12 === 0 ? 12 : hour24 % 12;
   return minute === 0 ? `${hour} ${meridiem}` : `${hour}:${String(minute).padStart(2, "0")} ${meridiem}`;
 }
+
+/**
+ * How long after its start an event with no stated end is still treated as
+ * running.
+ *
+ * Plenty of listings give only a start ("10:30 AM" for a storytime, "11 AM"
+ * for a fair that runs all afternoon). Dropping those out of the day the
+ * minute their start passes would hide events that are still going, so they
+ * get an hour and a half of benefit of the doubt.
+ */
+export const UNKNOWN_END_GRACE_MINUTES = 90;
+
+export type EventStatus = "unknown" | "upcoming" | "now" | "past";
+
+/**
+ * Where an event sits relative to the current time, for events on today's
+ * date only — the caller decides which day is today.
+ */
+export function eventStatus({ startMinutes, endMinutes }: EventMinutes, nowMinutes: number): EventStatus {
+  if (startMinutes === null) return "unknown";
+  if (nowMinutes < startMinutes) return "upcoming";
+  const end = endMinutes ?? startMinutes + UNKNOWN_END_GRACE_MINUTES;
+  return nowMinutes <= end ? "now" : "past";
+}
+
+/** Minutes until an event starts, or null when it has started or has no clock. */
+export function minutesUntil(startMinutes: number | null, nowMinutes: number) {
+  if (startMinutes === null || startMinutes <= nowMinutes) return null;
+  return startMinutes - nowMinutes;
+}
+
+/** "in 25 min", "in 1 hr", "in 2 hr 15 min" — how the cards count down. */
+export function formatCountdown(minutes: number) {
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `in ${hours} hr` : `in ${hours} hr ${rest} min`;
+}
+
+/** Local wall-clock time as minutes past midnight. */
+export function nowMinutes(date = new Date()) {
+  return date.getHours() * 60 + date.getMinutes();
+}

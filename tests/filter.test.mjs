@@ -10,6 +10,7 @@ import {
   filterEvents,
   isFree,
   matchesVibe,
+  resolveSort,
   searchText,
   settingLabel,
   viewReducer,
@@ -218,4 +219,33 @@ test("viewReducer sets, clears and resets", () => {
 test("viewReducer returns the same object when nothing changed", () => {
   const state = viewReducer(DEFAULT_VIEW, { type: "kind", value: "Library" });
   assert.equal(viewReducer(state, { type: "kind", value: "Library" }), state);
+});
+
+test("sorting by soonest orders the day and leaves unreadable times at the end", () => {
+  const events = [
+    makeEvent({ id: "evening", time: "7–9 PM" }),
+    makeEvent({ id: "unknown", time: "During library hours" }),
+    makeEvent({ id: "morning", time: "10:30 AM" }),
+    makeEvent({ id: "afternoon", time: "4:30–6:30 PM" }),
+  ];
+  const sorted = filterEvents(buildSearchIndex(events), { ...DEFAULT_CRITERIA, sort: "soonest" }, new Set());
+  assert.deepEqual(sorted.map((event) => event.id), ["morning", "afternoon", "evening", "unknown"]);
+});
+
+test("sorting by soonest prefers the normalized minutes over the display string", () => {
+  // A live event carries minutes the API worked out; they win over the text.
+  const events = [
+    makeEvent({ id: "later", time: "See listing", startMinutes: 18 * 60, endMinutes: null }),
+    makeEvent({ id: "earlier", time: "See listing", startMinutes: 9 * 60, endMinutes: null }),
+  ];
+  const sorted = filterEvents(buildSearchIndex(events), { ...DEFAULT_CRITERIA, sort: "soonest" }, new Set());
+  assert.deepEqual(sorted.map((event) => event.id), ["earlier", "later"]);
+});
+
+test("resolveSort is chronological on today and editorial when planning ahead", () => {
+  assert.equal(resolveSort("auto", true), "soonest");
+  assert.equal(resolveSort("auto", false), "recommended");
+  // An explicit choice is always honoured.
+  assert.equal(resolveSort("closest", true), "closest");
+  assert.equal(resolveSort("recommended", true), "recommended");
 });

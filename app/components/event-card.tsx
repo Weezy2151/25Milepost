@@ -3,7 +3,8 @@
 import { memo } from "react";
 import Image from "next/image";
 
-import { driveMinutes, isFree, settingLabel, type EventPick } from "../../lib/filter";
+import { driveMinutes, eventMinutes, isFree, settingLabel, type EventPick } from "../../lib/filter";
+import { eventStatus, formatCountdown, minutesUntil } from "../../lib/time";
 import { weatherEmoji, type DayForecast } from "../../lib/weather";
 import { IconBookmark, IconCheck, IconClock, IconPin, IconPlus } from "./icons";
 
@@ -12,6 +13,7 @@ export const EventCard = memo(function EventCard({
   isSaved,
   inPlan,
   forecast,
+  nowMinutes,
   onToggleSave,
   onTogglePlan,
   onOpen,
@@ -20,16 +22,24 @@ export const EventCard = memo(function EventCard({
   isSaved: boolean;
   inPlan: boolean;
   forecast: DayForecast | null;
+  /** Local time as minutes past midnight, or null for a day that is not today. */
+  nowMinutes: number | null;
   onToggleSave: (id: string) => void;
   onTogglePlan: (event: EventPick) => void;
   onOpen: (event: EventPick) => void;
 }) {
   const initials = event.town === "Orchard Park" ? "OP" : event.town.slice(0, 2).toUpperCase();
+  // Only today's cards carry a live status; on any other day "now" is meaningless.
+  const minutes = eventMinutes(event);
+  const status = nowMinutes === null ? "unknown" : eventStatus(minutes, nowMinutes);
+  const startsIn = nowMinutes === null ? null : minutesUntil(minutes.startMinutes, nowMinutes);
+  // A countdown is only news within a couple of hours of the start.
+  const countdown = startsIn !== null && startsIn <= 120 ? formatCountdown(startsIn) : null;
   // Aggregated feeds occasionally repeat a tag; de-dupe so React keys stay unique.
   const tags = [...new Set(event.tags)].slice(0, 3);
 
   return (
-    <article className={`card accent-${event.accent}`} id={event.id}>
+    <article className={`card accent-${event.accent}${status === "past" ? " is-past" : ""}`} id={event.id}>
       <button type="button" className="card-media" onClick={() => onOpen(event)} aria-label={`Open details for ${event.title}`}>
         {event.image ? (
           <Image
@@ -46,7 +56,15 @@ export const EventCard = memo(function EventCard({
           </span>
         )}
         <span className="card-flags">
-          <span className={event.today ? "flag today" : "flag"}>{event.day}</span>
+          {status === "now" ? (
+            <span className="flag live">
+              <i className="live-dot" aria-hidden="true" /> Happening now
+            </span>
+          ) : countdown ? (
+            <span className="flag soon">Starts {countdown}</span>
+          ) : (
+            <span className={event.today ? "flag today" : "flag"}>{event.day}</span>
+          )}
           <span className="flag" title={event.distancePrecision === "town" ? `Approximate — measured from the centre of ${event.town}` : undefined}>
             {event.distancePrecision === "town" || event.distancePrecision === "region" ? "~" : ""}
             {event.distance} mi · ~{driveMinutes(event.distance)} min
