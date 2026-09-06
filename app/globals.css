@@ -938,6 +938,18 @@ button { margin: 0; background: none; cursor: pointer; }
 }
 .day-group-head h3 { margin: 0; font: 700 24px/1.1 var(--serif); letter-spacing: -0.025em; }
 .day-group-head > span { color: var(--text-3); font-size: 12px; font-weight: 700; }
+.day-more {
+  margin-top: 14px;
+  width: 100%;
+  padding: 11px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-2);
+  font: 700 13px/1 var(--sans);
+  cursor: pointer;
+}
+.day-more:hover { border-color: var(--line-strong); background: var(--surface-2); color: var(--text); }
 
 .card {
   position: relative;

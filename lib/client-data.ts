@@ -15,6 +15,7 @@ const EVENT_KINDS = new Set([
   "Library",
 ]);
 const EVENT_SETTINGS = new Set(["indoor", "outdoor", "both"]);
+const EVENT_AUDIENCES = new Set(["toddler", "kids", "teen", "family"]);
 const AREAS = new Set(["southtowns", "city"]);
 const DISTANCE_PRECISIONS = new Set(["venue", "town", "region"]);
 
@@ -76,6 +77,9 @@ function isLiveEvent(value: unknown): value is LiveEvent {
     Array.isArray(value.tags) &&
     value.tags.length <= 20 &&
     value.tags.every((tag) => isNonEmptyString(tag, 100)) &&
+    Array.isArray(value.audiences) &&
+    value.audiences.length <= 4 &&
+    value.audiences.every((audience) => EVENT_AUDIENCES.has(audience as string)) &&
     (value.image === undefined || (isNonEmptyString(value.image, 2_048) && isAllowedEventImage(value.image))) &&
     (value.today === undefined || typeof value.today === "boolean");
 }
@@ -95,7 +99,7 @@ function isSourceHealth(value: unknown): value is SourceHealth {
  * cache entry or unexpected response from crashing the interactive page.
  */
 export function parseEventsPayload(value: unknown): EventsPayload | null {
-  if (!isRecord(value) || !Array.isArray(value.events) || value.events.length > 1_000 || !value.events.every(isLiveEvent)) return null;
+  if (!isRecord(value) || !Array.isArray(value.events) || value.events.length > 1_400 || !value.events.every(isLiveEvent)) return null;
   if (!Array.isArray(value.sources) || value.sources.length > 100 || !value.sources.every(isSourceHealth)) return null;
   if (!Number.isInteger(value.count) || value.count !== value.events.length || !isNonEmptyString(value.updatedAt) || Number.isNaN(Date.parse(value.updatedAt))) return null;
   if (!isRecord(value.window) || !isDateKey(value.window.from) || !isDateKey(value.window.to)) return null;

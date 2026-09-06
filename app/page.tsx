@@ -33,13 +33,17 @@ const KIND_OPTIONS: EventKind[] = [
 ];
 
 const MOODS: { id: Vibe; icon: string; label: string }[] = [
+  { id: "toddler", icon: "🧸", label: "Toddlers & preschool" },
+  { id: "kids", icon: "🎨", label: "Keep kids busy" },
   { id: "outside", icon: "🌳", label: "Get outside" },
-  { id: "kids", icon: "🧸", label: "Keep kids busy" },
   { id: "food", icon: "🥐", label: "Eat & browse" },
   { id: "evening", icon: "🌙", label: "After 5" },
   { id: "rain", icon: "🏛️", label: "Rain plan" },
   { id: "drive", icon: "🚗", label: "Worth the drive" },
 ];
+
+/** Cards rendered per day in the week view before the reader asks for the rest. */
+const WEEK_PREVIEW_PER_DAY = 24;
 
 const SAVED_KEY = "twenty-five-mile-post-clippings";
 const PLAN_KEY = "twenty-five-mile-post-myday";
@@ -257,6 +261,7 @@ export default function Home() {
   const [maxDistance, setMaxDistance] = useState<number | null>(null);
   /** null = the whole week; a date key narrows the list to one day. */
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [expandedDays, setExpandedDays] = useState<string[]>([]);
   const [sort, setSort] = useState<Sort>("recommended");
   const [query, setQuery] = useState("");
   const [showSaved, setShowSaved] = useState(false);
@@ -370,9 +375,19 @@ export default function Home() {
       return /\b(trail|hike|hiking|nature|outdoor|lawn|garden|beach|waterfront)\b/i.test(text)
         || /\bpark\b/i.test(event.venue) || /\bpark\b/i.test(event.title);
     }
-    if (choice === "kids") {
+    if (choice === "kids" || choice === "toddler") {
       // Exclude age-gated events — 18+/21+ bars, breweries, etc.
       if (/\b(18\+|21\+|adults?\s*only)\b/i.test(text) || event.tags?.includes("21+")) return false;
+      // The server resolves this from what the sources actually publish —
+      // LibCal audience tags, event categories — so the chip reads a field
+      // rather than guessing from prose. The keyword pass below is the fallback
+      // for the bundled snapshot, which predates the field.
+      if (event.audiences?.length) {
+        return choice === "toddler"
+          ? event.audiences.includes("toddler")
+          : event.audiences.some((audience) => audience === "kids" || audience === "toddler" || audience === "family");
+      }
+      if (choice === "toddler") return /\b(storytime|story time|toddler|preschool|baby|babies|little ones|play cafe|sensory)\b/i.test(text);
       return /\b(kids|family|children|storytime|playground|playhouse|play cafe|play area|animals|museum)\b/i.test(text) || event.kind === "Library";
     }
     if (choice === "food") return event.kind === "Markets & food" || /\b(market|produce|farm|food|tasting|bakery|food truck)\b/i.test(text);
@@ -970,7 +985,14 @@ export default function Home() {
           {filtered.length ? (
             activeDay === null ? (
               <div className="week-list">
-                {filteredByDay.map((day) => (
+                {filteredByDay.map((day) => {
+                  // A well-stocked day now runs past a hundred listings, and the
+                  // week view stacks eight of them. Show each day's best and let
+                  // the reader ask for the rest, rather than mounting a thousand
+                  // cards nobody scrolls to.
+                  const expanded = expandedDays.includes(day.dateKey);
+                  const shown = expanded ? day.events : day.events.slice(0, WEEK_PREVIEW_PER_DAY);
+                  return (
                   <section className="day-group" key={day.dateKey} aria-labelledby={`day-${day.dateKey}`}>
                     <div className="day-group-head">
                       <div>
@@ -980,7 +1002,7 @@ export default function Home() {
                       <span>{day.events.length} {day.events.length === 1 ? "pick" : "picks"}</span>
                     </div>
                     <div className="grid">
-                      {day.events.map((event) => (
+                      {shown.map((event) => (
                         <EventCard
                           key={event.id}
                           event={event}
@@ -993,8 +1015,14 @@ export default function Home() {
                         />
                       ))}
                     </div>
+                    {day.events.length > shown.length && (
+                      <button type="button" className="day-more" onClick={() => setExpandedDays((days) => [...days, day.dateKey])}>
+                        Show all {day.events.length} on {day.date}
+                      </button>
+                    )}
                   </section>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="grid">
@@ -1143,11 +1171,15 @@ export default function Home() {
                 </div>
 
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <a className="btn-ghost" href={selected.url} target="_blank" rel="noreferrer">
-                    <IconTicket style={{ width: 15, height: 15 }} />
-                    {selected.source}
-                    <IconExternal style={{ width: 13, height: 13 }} />
-                  </a>
+                  {/* A feed that publishes no per-event link would otherwise
+                      render an href of "", which reloads this page. */}
+                  {selected.url && (
+                    <a className="btn-ghost" href={selected.url} target="_blank" rel="noreferrer">
+                      <IconTicket style={{ width: 15, height: 15 }} />
+                      {selected.source}
+                      <IconExternal style={{ width: 13, height: 13 }} />
+                    </a>
+                  )}
                   <button
                     type="button"
                     className={saved.includes(selected.id) ? "btn-ghost" : "btn-ghost"}

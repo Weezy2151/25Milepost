@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { getCachedEntry, setCachedData, acquireCacheLock } from "../db/cache.ts";
+import { deriveAudiences, kidScore } from "../lib/audience.ts";
 import { parseEventsPayload, parseStoredIds, parseStoredPlan, parseWeatherPayload } from "../lib/client-data.ts";
 import { parseIcalOccurrences } from "../lib/ical.ts";
 import { assertSafePublicUrl } from "../lib/safe-fetch.ts";
@@ -32,6 +33,24 @@ test("scraped-source fixtures retain their normalized event fields", async () =>
   assert.equal(parks[0]?.time, "6 PM–7:30 PM");
 });
 
+test("audiences come from source labels first and prose second", () => {
+  // LibCal publishes the age bands itself; that beats anything in the prose.
+  assert.deepEqual(
+    deriveAudiences("Read to a Dog", "Practise reading aloud.", ["Children (6-11)", "Families"]),
+    ["kids"],
+  );
+  assert.deepEqual(deriveAudiences("Baby Lap Sit", "Rhymes for babies and caregivers.", []), ["toddler"]);
+  // A specific band wins over the vaguer "family" when both are present.
+  assert.deepEqual(deriveAudiences("Family Storytime", "Stories for preschoolers.", []), ["toddler"]);
+  assert.deepEqual(deriveAudiences("Movie Night on the Lawn", "Bring the whole family.", []), ["family"]);
+  // Nothing about a brewery tasting is for a three-year-old, family table or not.
+  assert.deepEqual(deriveAudiences("Family-Style Beer Dinner", "Ages 21+ only.", ["Nightlife"]), []);
+  assert.deepEqual(deriveAudiences("Planning Board Meeting", "Agenda enclosed.", []), []);
+
+  assert.ok(kidScore(["toddler", "kids"]) > kidScore(["kids"]));
+  assert.equal(kidScore([]), 0);
+});
+
 test("stored itineraries migrate to the compact v2 contract", () => {
   const legacy = JSON.stringify([{ id: "event-1", title: "Family Night", venue: "Old venue", cost: "Old price" }]);
   assert.deepEqual(parseStoredPlan(legacy), [{ id: "event-1", title: "Family Night" }]);
@@ -46,7 +65,8 @@ test("lightweight browser guards accept API data and reject unsafe payloads", ()
     description: "A family-friendly community day.", cost: "Free", source: "Town calendar",
     url: "https://everythingop.com/events/family-day", mapUrl: "https://www.google.com/maps/search/?api=1&query=Orchard+Park",
     tags: ["Family"], accent: "mint", image: "https://images.everythingop.com/family-day.jpg", today: true,
-    kind: "Community", setting: "both", priority: 5, lat: 42.767, lon: -78.744, distancePrecision: "venue",
+    kind: "Community", setting: "both", audiences: ["family"], priority: 5, lat: 42.767, lon: -78.744,
+    distancePrecision: "venue",
   };
   const payload = {
     events: [event], count: 1, updatedAt: "2026-08-23T12:00:00.000Z",
@@ -57,6 +77,8 @@ test("lightweight browser guards accept API data and reject unsafe payloads", ()
   };
   assert.equal(parseEventsPayload(payload)?.events[0]?.id, "event-1");
   assert.equal(parseEventsPayload({ ...payload, events: [{ ...event, image: "https://attacker.example/image.jpg" }] }), null);
+  assert.equal(parseEventsPayload({ ...payload, events: [{ ...event, audiences: ["grown-ups"] }] }), null);
+  assert.equal(parseEventsPayload({ ...payload, events: [{ ...event, audiences: undefined }] }), null);
   assert.deepEqual(parseStoredIds('["a","a","b"]'), ["a", "b"]);
 
   const weather = {

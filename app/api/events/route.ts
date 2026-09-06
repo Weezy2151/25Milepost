@@ -1,15 +1,16 @@
 import { after } from "next/server";
 
 import { acquireCacheLock, cacheBackendName, getCachedEntry, setCachedData } from "../../../db/cache";
+import { deriveAudiences, kidScore } from "../../../lib/audience";
 import { distanceFromOrigin, extractTown, ORIGIN } from "../../../lib/geo";
 import { describe, resolveImages } from "../../../lib/enrich";
-import { eventsPayloadSchema, liveEventSchema, type EventKind, type EventsPayload, type EventSetting, type LiveEvent, type SourceHealth } from "../../../lib/events";
+import { eventsPayloadSchema, liveEventSchema, type EventAudience, type EventKind, type EventsPayload, type EventSetting, type LiveEvent, type SourceHealth } from "../../../lib/events";
 import { EVENTS_HEALTH_KEY, healthSnapshotSchema, type HealthSnapshot } from "../../../lib/health";
 import { parseIcalOccurrences } from "../../../lib/ical";
 import { assertSafePublicUrl, EVENT_IMAGE_HOSTS, fetchPublicText } from "../../../lib/safe-fetch";
 import { parseErieParks, parseGrowthZone, parseStepOutBuffalo, parseVisitBuffalo, type ScrapedEvent } from "../../../lib/scrape";
 
-export type { EventSetting, LiveEvent } from "../../../lib/events";
+export type { EventAudience, EventSetting, LiveEvent } from "../../../lib/events";
 
 const ZONE = "America/New_York";
 const LOCAL_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
@@ -24,9 +25,20 @@ const DAY_FORMATTER = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekda
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
+/**
+ * B&ECPL's LibCal calendars.
+ *
+ * The two category feeds are the ones we know carry programming; the un-scoped
+ * feed (no `cid`) should return the system's whole calendar, which matters not
+ * because we want more library cards — `capLibraries` still keeps a dozen a day
+ * — but because it widens the pool those twelve are chosen from. `dedupe`
+ * absorbs the overlap. Added 2026-09-06 and unverified: if it reports an error
+ * or a persistent count of 0 in `/api/health`, delete the row.
+ */
 const LIBRARY_FEEDS = [
   ["Library Programs", "https://buffalolib.libcal.com/rss.php?iid=4336&m=month&cid=12898"],
   ["Library Crafts", "https://buffalolib.libcal.com/rss.php?iid=4336&m=month&cid=16301"],
+  ["Library Calendar", "https://buffalolib.libcal.com/rss.php?iid=4336&m=month"],
 ] as const;
 
 /**
@@ -40,7 +52,20 @@ const TRIBE_FEEDS = [
   ["EverythingOP", "https://everythingop.com", "southtowns", "Orchard Park"],
   ["Orchard Park Chamber", "https://orchardparkchamber.org", "southtowns", "Orchard Park"],
   ["Buffalo Rising", "https://www.buffalorising.com", "city", "Buffalo"],
+  // Added 2026-09-06 for family programming the app had no source for: park
+  // movie nights and children's walking tours. Both run The Events Calendar,
+  // but neither endpoint has been probed — check `/api/health` after deploy and
+  // remove any row that errors or stays at count 0.
+  ["Buffalo Olmsted Parks", "https://www.bfloparks.org", "city", "Buffalo"],
+  ["Explore Buffalo", "https://explorebuffalo.org", "city", "Buffalo"],
 ] as const;
+
+/**
+ * Wide-net sites that list venues well outside the radius. Their events are
+ * dropped rather than allowed the flattering UNKNOWN_DISTANCE fallback when we
+ * cannot actually place them — see `parseTribe`.
+ */
+const REGIONAL_TRIBE_FEEDS = new Set<string>(["Buffalo Rising", "Buffalo Olmsted Parks", "Explore Buffalo"]);
 
 /*
  * Removed 2026-08-23, all confirmed dead rather than merely quiet:
@@ -54,6 +79,11 @@ const ICS_FEEDS = [
   ["Town of Evans", "https://townofevansny.gov/events/month/?ical=1&shortcode=a96c91f8", "southtowns"],
   ["Southtowns Regional Chamber", "https://southtownsregionalchamber.org/?post_type=tribe_events&ical=1&eventDisplay=list", "southtowns"],
   ["Explore & More", "https://exploreandmore.org/events/?ical=1", "city"],
+  // Added 2026-09-06, unverified: West Seneca runs CivicPlus, which exposes a
+  // standard iCalendar path. Its recreation calendar is the town programming
+  // (open gyms, kids' craft afternoons) nothing else here carries. Remove if
+  // `/api/health` shows it erroring or empty.
+  ["Town of West Seneca", "https://www.westseneca.gov/common/modules/iCalendar/iCalendar.aspx?feed=calendar", "southtowns"],
 ] as const;
 
 /**
@@ -77,31 +107,75 @@ const SCRAPED_FEEDS: ReadonlyArray<readonly [string, string, ScrapeParser, "sout
   ["Erie County Parks", "https://www3.erie.gov/parks/events", "erieparks", "southtowns", ""],
 ] as const;
 
-const branchInfo: Record<string, { town: string; distance: number; area: "southtowns" | "city" }> = {
-  "Orchard Park Public Library": { town: "Orchard Park", distance: 1, area: "southtowns" },
-  "Hamburg Public Library": { town: "Hamburg", distance: 12, area: "southtowns" },
-  "Lake Shore Branch Library": { town: "Lakeshore", distance: 11, area: "southtowns" },
-  "Eden Library": { town: "Eden", distance: 16, area: "southtowns" },
-  "Elma Public Library": { town: "Elma", distance: 10, area: "southtowns" },
-  "West Seneca Public Library": { town: "West Seneca", distance: 9, area: "southtowns" },
-  "Lackawanna Public Library": { town: "Lackawanna", distance: 10, area: "southtowns" },
-  "Boston Free Library": { town: "Boston", distance: 17, area: "southtowns" },
-  "Aurora Town Public Library": { town: "East Aurora", distance: 12, area: "southtowns" },
-  "Marilla Free Library": { town: "Marilla", distance: 16, area: "southtowns" },
-  "Lancaster Public Library": { town: "Lancaster", distance: 18, area: "southtowns" },
-  "Anna Reinstein Memorial Library": { town: "Cheektowaga", distance: 16, area: "southtowns" },
-  "Julia Boyer Reinstein Library": { town: "Cheektowaga", distance: 18, area: "southtowns" },
-  "Central Library": { town: "Buffalo", distance: 18, area: "city" },
-  "Crane Branch Library": { town: "Buffalo", distance: 17, area: "city" },
-  "Dudley Branch Library": { town: "Buffalo", distance: 14, area: "city" },
-  "East Clinton Branch Library": { town: "Buffalo", distance: 13, area: "city" },
-  "Elaine M. Panty Branch Library": { town: "Buffalo", distance: 17, area: "city" },
-  "Frank E. Merriweather, Jr. Branch Library": { town: "Buffalo", distance: 17, area: "city" },
-  "Isaías González-Soto Branch Library": { town: "Buffalo", distance: 16, area: "city" },
-  "Leroy R. Coles, Jr. Branch Library": { town: "Buffalo", distance: 18, area: "city" },
-  "North Park Branch Library": { town: "Buffalo", distance: 18, area: "city" },
-  "Riverside Branch Library": { town: "Buffalo", distance: 20, area: "city" },
+/**
+ * B&ECPL campuses, keyed exactly as the LibCal feed names them.
+ *
+ * This is a lookup for the town and area, not a gate: `libraryBranch` falls back
+ * to reading the town out of the campus name, so a branch missing from this
+ * table (or renamed upstream) still places itself rather than disappearing. The
+ * table stays because a dozen branches are named for something other than their
+ * town — "Anna Reinstein" says nothing about Cheektowaga.
+ */
+const branchInfo: Record<string, { town: string; area: "southtowns" | "city" }> = {
+  "Orchard Park Public Library": { town: "Orchard Park", area: "southtowns" },
+  "Hamburg Public Library": { town: "Hamburg", area: "southtowns" },
+  "Lake Shore Branch Library": { town: "Lakeshore", area: "southtowns" },
+  "Eden Library": { town: "Eden", area: "southtowns" },
+  "Elma Public Library": { town: "Elma", area: "southtowns" },
+  "West Seneca Public Library": { town: "West Seneca", area: "southtowns" },
+  "Lackawanna Public Library": { town: "Lackawanna", area: "southtowns" },
+  "Boston Free Library": { town: "Boston", area: "southtowns" },
+  "Aurora Town Public Library": { town: "East Aurora", area: "southtowns" },
+  "Marilla Free Library": { town: "Marilla", area: "southtowns" },
+  "Lancaster Public Library": { town: "Lancaster", area: "southtowns" },
+  "Anna Reinstein Memorial Library": { town: "Cheektowaga", area: "southtowns" },
+  "Julia Boyer Reinstein Library": { town: "Cheektowaga", area: "southtowns" },
+  "Angola Public Library": { town: "Angola", area: "southtowns" },
+  "Collins Public Library": { town: "Collins", area: "southtowns" },
+  "North Collins Public Library": { town: "North Collins", area: "southtowns" },
+  "Concord Public Library": { town: "Springville", area: "southtowns" },
+  "Depew: Anna Reinstein Library": { town: "Depew", area: "southtowns" },
+  "Alden Ewell Free Library": { town: "Alden", area: "southtowns" },
+  "Clarence Public Library": { town: "Clarence", area: "southtowns" },
+  "Williamsville Library": { town: "Williamsville", area: "southtowns" },
+  "Audubon Library": { town: "Amherst", area: "southtowns" },
+  "Clearfield Library": { town: "Amherst", area: "southtowns" },
+  "Eggertsville-Snyder Library": { town: "Amherst", area: "southtowns" },
+  "Kenmore Library": { town: "Kenmore", area: "city" },
+  "Kenilworth Library": { town: "Tonawanda", area: "city" },
+  "Town of Tonawanda Library": { town: "Tonawanda", area: "city" },
+  // Newstead (Akron) is deliberately absent: it resolves to 26 miles and the
+  // radius filter drops it. Its coordinates live in `VENUES` so it is measured
+  // rather than guessed at.
+  "Central Library": { town: "Buffalo", area: "city" },
+  "Crane Branch Library": { town: "Buffalo", area: "city" },
+  "Dudley Branch Library": { town: "Buffalo", area: "city" },
+  "East Clinton Branch Library": { town: "Buffalo", area: "city" },
+  "Elaine M. Panty Branch Library": { town: "Buffalo", area: "city" },
+  "Frank E. Merriweather, Jr. Branch Library": { town: "Buffalo", area: "city" },
+  "Isaías González-Soto Branch Library": { town: "Buffalo", area: "city" },
+  "Leroy R. Coles, Jr. Branch Library": { town: "Buffalo", area: "city" },
+  "North Park Branch Library": { town: "Buffalo", area: "city" },
+  "Riverside Branch Library": { town: "Buffalo", area: "city" },
 };
+
+/**
+ * Place a library campus.
+ *
+ * The table above covers the branches whose names hide their town. Everything
+ * else — and B&ECPL has more member libraries than any table stays current with
+ * — is resolved from the campus name itself, which is how "Clarence Public
+ * Library" works without an entry. A campus that resolves to nothing is still
+ * dropped: an unplaceable branch would otherwise claim UNKNOWN_DISTANCE and slip
+ * inside the 25-mile radius on a guess.
+ */
+function libraryBranch(venue: string): { town: string; area: "southtowns" | "city" } | null {
+  const known = branchInfo[venue];
+  if (known) return known;
+  const town = titleCase(extractTown(venue) ?? "");
+  if (!town) return null;
+  return { town, area: town.toLowerCase() === "buffalo" ? "city" : "southtowns" };
+}
 
 function localDateKey(date = new Date()) {
   return LOCAL_DATE_FORMATTER.format(date);
@@ -248,7 +322,7 @@ function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[
     const dateKey = decode(textBetween(item, "libcal:date"));
     if (dateKey < todayKey || dateKey > endKey) return [];
     const venue = cleanHtml(textBetween(item, "libcal:campus"));
-    const info = branchInfo[venue];
+    const info = libraryBranch(venue);
     if (!info) return [];
     const title = cleanHtml(textBetween(item, "title"));
     const description = cleanHtml(textBetween(item, "libcal:description"));
@@ -265,6 +339,9 @@ function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[
     const tags = [category || "Library", ...audiences.slice(0, 2)].filter(Boolean);
     const kind = "Library" as const;
     const setting = inferSetting(title, description, venue, tags, kind);
+    // LibCal's own audience list is the most reliable age signal any source
+    // gives us, so the category label rides along only as a hint.
+    const forWhom = deriveAudiences(title, description, [...audiences, category]);
 
     const located = place(venue, info.town);
     if (located.distance > 25) return [];
@@ -278,7 +355,10 @@ function parseLibrary(xml: string, todayKey: string, endKey: string): LiveEvent[
       source: "Buffalo & Erie County Public Library", url, mapUrl: mapUrl(venue, info.town),
       tags,
       accent: ["mint", "sky", "sun", "coral", "purple"][index % 5], image: image || undefined, today: dateKey === todayKey,
-      kind, setting, priority: 1,
+      kind, setting, audiences: forWhom,
+      // Library programming used to rank below every other source, which buried
+      // the storytimes under a hundred cards. A kid program now sits mid-page.
+      priority: 4 + (kidScore(forWhom) > 0 ? 2 : 0),
     }];
   });
 }
@@ -385,6 +465,7 @@ function parseTribe(
       image: tribeImage(item.image),
       today: dateKey === todayKey,
       kind, setting: inferSetting(title, description, venue, tags, kind),
+      audiences: deriveAudiences(title, description, categories),
       // Above municipal listings, below the hand-picked marquee events.
       priority: kind === "Community" ? 5 : 6,
     }));
@@ -476,6 +557,7 @@ function parseTicketmaster(json: string, todayKey: string, endKey: string): Live
       image: ticketmasterImage(item.images),
       today: dateKey === todayKey,
       kind, setting: inferSetting(title, description, venue, tags, kind),
+      audiences: deriveAudiences(title, description, genres),
       priority: 7,
     }];
   });
@@ -492,19 +574,34 @@ function place(venue: string, town: string) {
   return { distance, lat: coords.lat, lon: coords.lon, distancePrecision: precision };
 }
 
+/**
+ * Where an iCalendar source sits, for the feeds whose events carry a bare room
+ * name ("Senior Center") rather than an address. A source absent from the map
+ * falls back to reading the town out of the venue.
+ */
+const ICS_SOURCE_TOWNS: Record<string, string> = {
+  "Town of Evans": "Lakeshore",
+  "Town of West Seneca": "West Seneca",
+};
+
+/** The human page to link when a VEVENT carries no URL of its own. */
+const ICS_SOURCE_PAGES: Record<string, string> = {
+  "Town of Orchard Park": "https://www.orchardparkny.gov/events/",
+  "Town of Evans": "https://townofevansny.gov/events/",
+  "Town of West Seneca": "https://www.westseneca.gov/calendar.aspx",
+};
+
 function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city", todayKey: string, endKey: string): LiveEvent[] {
   return parseIcalOccurrences(ics, todayKey, endKey, ZONE).flatMap((item, index) => {
     const { dateKey, title } = item;
     const description = cleanHtml(item.description);
     if (!familyFriendly(title, [], description)) return [];
     const venue = item.location || source;
-    const sourceTown = source === "Town of Evans" ? "Lakeshore" : source === "West Seneca Recreation" ? "West Seneca" : source === "Hamburg Recreation" ? "Hamburg" : "";
-    const town = sourceTown || inferTown(venue, defaultArea);
+    const town = ICS_SOURCE_TOWNS[source] || inferTown(venue, defaultArea);
     const located = place(venue, town);
     if (located.distance > 25) return [];
     const area = town === "Buffalo" ? "city" : defaultArea;
-    const sourceUrl = source === "Town of Orchard Park" ? "https://www.orchardparkny.gov/events/" : source === "Town of Evans" ? "https://townofevansny.gov/events/" : source === "West Seneca Recreation" ? "https://westsenecany.myrec.com/info/calendar/list.aspx" : source === "Hamburg Recreation" ? "https://www.townofhamburgny.gov/Calendar.aspx" : "https://www.buffalony.gov/calendar.aspx?CID=34&view=list";
-    const url = item.url || sourceUrl;
+    const url = item.url || ICS_SOURCE_PAGES[source] || "";
     const kind = classify(title, description, source);
     const tags = [kind, source.includes("Orchard") ? "Orchard Park" : "Community"];
     const setting = inferSetting(title, description, venue, tags, kind);
@@ -519,6 +616,7 @@ function parseIcs(ics: string, source: string, defaultArea: "southtowns" | "city
       tags,
       accent: ["coral", "sky", "mint", "sun", "purple"][index % 5],
       today: dateKey === todayKey, kind, setting,
+      audiences: deriveAudiences(title, description),
       priority: kind === "Community" ? 2 : 4,
     }];
   });
@@ -623,6 +721,9 @@ function parseScraped(
         image: item.image,
         today: dateKey === todayKey,
         kind, setting: inferSetting(item.title, item.description, venue, tags, kind),
+        // Erie County Parks labels its family programming ("Kids & Families"),
+        // which is exactly the signal the prose pass would otherwise miss.
+        audiences: deriveAudiences(item.title, item.description, [item.category]),
         // Strong Step Out listings can rank alongside the other live feeds;
         // routine recurring listings remain useful but sit lower in the day.
         priority: parser === "stepout" ? Math.max(4, Math.min(8, interest)) : parser === "erieparks" ? 8 : 7,
@@ -634,9 +735,10 @@ function parseScraped(
   // listing later in the page. Venue diversity prevents a fair's dozens of
   // micro-events from consuming the whole day.
   scoredEvents.sort((a, b) => b.interest - a.interest || b.event.priority - a.event.priority || a.event.time.localeCompare(b.event.time));
-  // Keep the broad Step Out feed useful as a guide instead of allowing one
-  // source to turn each day into an 80-card archive.
-  const dailyLimit = parser === "stepout" ? 24 : 12;
+  // These are the day's broadest listings, so they carry most of the volume —
+  // but no single source should own a day. `capBySource` enforces that ceiling
+  // globally once every feed has been merged; these are the local limits.
+  const dailyLimit = parser === "stepout" ? 40 : parser === "erieparks" ? 24 : 20;
   const perDay = new Map<string, number>();
   const perVenueDay = new Map<string, number>();
   return scoredEvents.filter(({ event }) => {
@@ -644,7 +746,7 @@ function parseScraped(
     if (count >= dailyLimit) return false;
     const venueKey = `${event.dateKey}|${event.venue.toLowerCase()}`;
     const venueCount = perVenueDay.get(venueKey) ?? 0;
-    if (parser === "stepout" && venueCount >= 8) return false;
+    if (parser === "stepout" && venueCount >= 10) return false;
     perDay.set(event.dateKey, count + 1);
     perVenueDay.set(venueKey, venueCount + 1);
     return true;
@@ -653,7 +755,7 @@ function parseScraped(
 
 type RecurringTemplate = {
   idPrefix: string;
-  dayOfWeek: number; // 0 = Sun, 1 = Mon, ..., 6 = Sat
+  dayOfWeek: number | readonly number[]; // 0 = Sun, 1 = Mon, ..., 6 = Sat
   monthStart?: number; // 1-12
   monthEnd?: number; // 1-12
   area: "southtowns" | "city";
@@ -661,7 +763,6 @@ type RecurringTemplate = {
   time: string;
   title: string;
   venue: string;
-  distance: number;
   description: string;
   cost: string;
   source: string;
@@ -669,6 +770,13 @@ type RecurringTemplate = {
   tags: string[];
   kind: EventKind;
   setting: EventSetting;
+  audiences?: EventAudience[];
+  /**
+   * Standing programming at a real venue whose hours we have not read off a
+   * live listing today. It renders without a clock time and says so on the
+   * card — an invented 10 AM storytime is worse than "check today's hours".
+   */
+  confirm?: true;
   priority: number;
 };
 
@@ -684,7 +792,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "4–7 PM",
     title: "Village of Orchard Park Farmers Market",
     venue: "Historic Orchard Park Train Depot · 395 S Lincoln Ave",
-    distance: 1,
     description: "Local produce and community vendors gather at the depot for Orchard Park's convenient Monday evening market.",
     cost: "Free entry",
     source: "EverythingOP",
@@ -704,7 +811,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "5–8 PM · music 5:30",
     title: "Levitt VIBE Buffalo · Lawn Concert",
     venue: "Ralph C. Wilson Jr. Centennial Park",
-    distance: 17,
     description: "Bring chairs or a picnic for a free lawn concert near the splash pad, with food trucks and community vendors.",
     cost: "Free",
     source: "Ralph Wilson Park",
@@ -723,7 +829,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "9:30–11:30 AM",
     title: "Au-Some Morning Edition",
     venue: "Explore & More Children's Museum",
-    distance: 19,
     description: "A sensory-friendly museum morning welcomes autistic children, friends and families for calm play, art and tinkering.",
     cost: "Free · registration required",
     source: "Explore & More",
@@ -744,7 +849,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "7 AM–1 PM",
     title: "East Aurora Farmers Market",
     venue: "115 Riley St · beside the Classic Rink",
-    distance: 12,
     description: "The midweek edition offers seasonal produce, meat, cheese, flowers, baked goods and other local farm products.",
     cost: "Free entry",
     source: "Erie Grown",
@@ -764,7 +868,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "10 AM–2 PM",
     title: "Mid-Week Hamburg Farmers Market",
     venue: "Peace Park · 22 Buffalo St",
-    distance: 8,
     description: "Restock on produce, baked goods, flowers and specialty foods at a compact family-friendly midweek market in the village.",
     cost: "Free entry",
     source: "WNY Thrive · Southtowns Regional Chamber",
@@ -784,7 +887,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "4:30–8 PM",
     title: "Cruise Night at the Depot",
     venue: "Orchard Park BR&P Depot · 370–380 S Lincoln Ave",
-    distance: 1,
     description: "Classic cars gather beside the historic train depot for an easy close-to-home evening with food available to purchase.",
     cost: "Free admission",
     source: "WNY Railway Historical Society",
@@ -804,7 +906,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "10:30 AM–12:30 PM",
     title: "EPIC Storytime at Canalside",
     venue: "Canalside Great Lawn",
-    distance: 19,
     description: "Stories and extended literacy activities help children ages 0–8 and caregivers learn and play together outdoors.",
     cost: "Free · registration required",
     source: "Buffalo Waterfront",
@@ -825,7 +926,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "4–7 PM",
     title: "West Seneca Farmers Market · Kids Day",
     venue: "West Seneca Town Center · 1250 Union Rd",
-    distance: 9,
     description: "More than 50 local vendors, produce, baked goods, dinner options, acoustic music and extra kids activities take over the Town Center lawn.",
     cost: "Free entry",
     source: "Town of West Seneca summer flyer",
@@ -843,7 +943,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "6 PM",
     title: "Bills Stadium Run with Nike",
     venue: "Wayland Brewing · 3740 N Buffalo St",
-    distance: 2,
     description: "Join a roughly five-mile community run from Wayland Brewing to the new Bills stadium and back.",
     cost: "See registration",
     source: "EverythingOP",
@@ -864,7 +963,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "10:30 AM",
     title: "Canalside for Kids Walking Tour",
     venue: "Waterway of Change Museum · Longshed",
-    distance: 19,
     description: "A guide turns waterfront history into a one-mile, stroller-friendly adventure designed for children ages 5–10.",
     cost: "Free · registration required",
     source: "Explore Buffalo",
@@ -884,7 +982,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "11 AM–1 PM",
     title: "Free Play Friday with Explore & More",
     venue: "Canalside · Pierce Lawn",
-    distance: 19,
     description: "Explore & More brings free outdoor children's play, sports and hands-on activities to the waterfront.",
     cost: "Free",
     source: "Buffalo Waterfront",
@@ -904,7 +1001,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "7–10 PM · film at sunset",
     title: "Family Movie Night: The Wild Robot",
     venue: "Prospect Park · Connecticut & Niagara",
-    distance: 17,
     description: "Bring a blanket or chair for the animated family adventure under the stars, with light refreshments while supplies last.",
     cost: "Free",
     source: "Buffalo Olmsted Parks",
@@ -925,7 +1021,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "7:30 AM–1 PM",
     title: "Hamburg Farmers Market",
     venue: "45 Church St · Village of Hamburg",
-    distance: 8,
     description: "Shop a deep lineup of local growers and producers at this rain-or-shine Southtowns market running since 1977.",
     cost: "Free entry",
     source: "Erie Grown",
@@ -945,7 +1040,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "7 AM–1 PM",
     title: "East Aurora Farmers Market",
     venue: "115 Riley St · beside the Classic Rink",
-    distance: 12,
     description: "Browse seasonal produce, meat, cheese, flowers, baked goods and other farm products from Western New York vendors.",
     cost: "Free entry",
     source: "Erie Grown",
@@ -963,7 +1057,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "9 AM–4:30 PM · gates 8:30",
     title: "East Aurora Flea & Farmers Market",
     venue: "Gallery 20A · 11167 Big Tree Rd",
-    distance: 12,
     description: "Farm produce, antiques, collectibles and general merchandise fill 180,000 square feet of indoor and outdoor expo space every weekend.",
     cost: "Free entry",
     source: "East Aurora Events",
@@ -981,7 +1074,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "10 AM–2 PM",
     title: "Orchard Park Depot Museum Open",
     venue: "Orchard Park BR&P Depot · 370–380 S Lincoln Ave",
-    distance: 1,
     description: "Step inside Orchard Park's restored railroad depot for a close-to-home look at local transportation history.",
     cost: "Free admission",
     source: "WNY Railway Historical Society",
@@ -1002,7 +1094,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "9 AM–1 PM",
     title: "South Buffalo Farmers Market",
     venue: "Cazenovia Park Casino lawn",
-    distance: 12,
     description: "Local growers and makers pair with live music, free 9:30 yoga and neighborhood bike rides for a lively Sunday market.",
     cost: "Free entry",
     source: "South Buffalo Farmers Market",
@@ -1020,7 +1111,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "9 AM–4:30 PM · gates 8:30",
     title: "East Aurora Flea & Farmers Market",
     venue: "Gallery 20A · 11167 Big Tree Rd",
-    distance: 12,
     description: "The Sunday half of the weekend market, with the same mix of farm stands, antiques dealers and general merchandise indoors and out.",
     cost: "Free entry",
     source: "East Aurora Events",
@@ -1040,7 +1130,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "9 AM–1 PM",
     title: "Eden Farmers Market",
     venue: "Eden Community Park · 8712 Sandrock Rd",
-    distance: 16,
     description: "A small-town Sunday market with produce, baked goods and local makers on the green.",
     cost: "Free entry",
     source: "Eden Community Association",
@@ -1060,7 +1149,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "9–11 AM",
     title: "Guided Trail Walk",
     venue: "Knox Farm State Park",
-    distance: 12,
     description: "A relaxed, family-paced loop through meadow and woodland trails on the former Knox estate.",
     cost: "Free · Empire Pass or day-use fee for parking",
     source: "Knox Farm State Park",
@@ -1080,7 +1168,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "10 AM–noon",
     title: "Chestnut Ridge Family Hike",
     venue: "Chestnut Ridge Park",
-    distance: 3,
     description: "Easy trails, playgrounds and the Eternal Flame waterfall make this an easy Sunday morning close to Orchard Park.",
     cost: "Free · parking fee on peak days",
     source: "Erie County Parks",
@@ -1098,7 +1185,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "4–5 PM",
     title: "LEGO Club",
     venue: "Orchard Park Public Library",
-    distance: 1,
     description: "Free-build with the library's LEGO collection in a drop-in, all-ages session close to home.",
     cost: "Free · drop-in",
     source: "B&ECPL",
@@ -1118,7 +1204,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "6:30–8 PM",
     title: "Boston Town Band Shell Concert",
     venue: "Boston Town Park",
-    distance: 17,
     description: "A free summer evening concert on the town green — bring chairs and a picnic.",
     cost: "Free",
     source: "Town of Boston",
@@ -1138,7 +1223,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "8:30 PM · at dusk",
     title: "Movies in the Park",
     venue: "Harlem Road Community Center",
-    distance: 8,
     description: "A free outdoor family movie night on the lawn, weather permitting.",
     cost: "Free",
     source: "Town of West Seneca",
@@ -1158,7 +1242,6 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     time: "6:35 PM first pitch",
     title: "Bisons Super Hero Night",
     venue: "Sahlen Field",
-    distance: 19,
     description: "A family baseball night adds Marvel costume photos, a comic giveaway for early arrivals and postgame fireworks.",
     cost: "$22 single · $99 family pack",
     source: "Buffalo Bisons",
@@ -1167,6 +1250,432 @@ const RECURRING_TEMPLATES: RecurringTemplate[] = [
     kind: "Sports & active",
     setting: "outdoor",
     priority: 9,
+  },
+];
+
+/** Every day of the week, for venues that are simply open. */
+const DAILY = [0, 1, 2, 3, 4, 5, 6] as const;
+const WEEKEND = [0, 6] as const;
+
+/**
+ * Standing places to take a small child, for the days the calendars are quiet.
+ *
+ * The live feeds are good at *events* and blind to the thing a parent of a
+ * three-year-old actually needs on a wet Tuesday: somewhere open. None of these
+ * venues publishes a machine-readable calendar — several publish no calendar at
+ * all — so they are carried here as standing entries rather than invented
+ * events.
+ *
+ * The rule that makes that honest: `confirm: true` means the generator prints
+ * no clock time and labels the card, so nothing here can assert a schedule we
+ * have not read today. They also rank below every live listing, and
+ * `dropSupersededRecurring` removes one the moment a real feed covers it.
+ */
+const KID_STAPLES: RecurringTemplate[] = [
+  /* ---------------------------------------------- indoor, any weather */
+  {
+    idPrefix: "explore-and-more-open-play",
+    dayOfWeek: DAILY,
+    area: "city",
+    town: "Buffalo",
+    time: "Check today's hours",
+    title: "Explore & More Children's Museum",
+    venue: "Explore & More · 130 Main St, Canalside",
+    description: "Four floors built for under-tens: a water gallery, a climbing tower, a pretend grocery and a toddler-only play area away from the bigger kids.",
+    cost: "Admission · see venue",
+    source: "Explore & More",
+    url: "https://exploreandmore.org/",
+    tags: ["Indoor play", "Toddlers", "Rain plan"],
+    kind: "Museums & culture",
+    setting: "indoor",
+    audiences: ["toddler", "kids"],
+    confirm: true,
+    priority: 3,
+  },
+  {
+    idPrefix: "science-museum-open",
+    dayOfWeek: DAILY,
+    area: "city",
+    town: "Buffalo",
+    time: "Check today's hours",
+    title: "Buffalo Museum of Science",
+    venue: "Buffalo Museum of Science · 1020 Humboldt Pkwy",
+    description: "Hands-on studios, dinosaurs and an under-fives discovery area make this an easy half-day indoors with young kids.",
+    cost: "Admission · see venue",
+    source: "Buffalo Museum of Science",
+    url: "https://www.sciencebuff.org/",
+    tags: ["Museum", "Dinosaurs", "Rain plan"],
+    kind: "Museums & culture",
+    setting: "indoor",
+    audiences: ["toddler", "kids"],
+    confirm: true,
+    priority: 3,
+  },
+  {
+    idPrefix: "botanical-gardens-open",
+    dayOfWeek: DAILY,
+    area: "city",
+    town: "Buffalo",
+    time: "Check today's hours",
+    title: "Botanical Gardens Glasshouse",
+    venue: "Buffalo & Erie County Botanical Gardens · 2655 South Park Ave",
+    description: "A warm, stroller-friendly loop through the domes — cacti, koi and palm house — that works on the coldest or wettest day of the week.",
+    cost: "Admission · see venue",
+    source: "Buffalo & Erie County Botanical Gardens",
+    url: "https://www.buffalogardens.com/",
+    tags: ["Indoor", "Stroller-friendly", "Rain plan"],
+    kind: "Outdoors",
+    setting: "indoor",
+    audiences: ["toddler", "family"],
+    confirm: true,
+    priority: 3,
+  },
+  {
+    idPrefix: "buffalo-zoo-open",
+    dayOfWeek: DAILY,
+    area: "city",
+    town: "Buffalo",
+    time: "Check today's hours",
+    title: "Buffalo Zoo",
+    venue: "Buffalo Zoo · 300 Parkside Ave",
+    description: "A compact zoo you can actually finish with small legs, with a children's zoo and indoor houses for when the weather turns.",
+    cost: "Admission · see venue",
+    source: "Buffalo Zoo",
+    url: "https://buffalozoo.org/",
+    tags: ["Animals", "Kids", "All day"],
+    kind: "Museums & culture",
+    setting: "both",
+    audiences: ["toddler", "kids"],
+    confirm: true,
+    priority: 3,
+  },
+  {
+    idPrefix: "naval-park-open",
+    dayOfWeek: DAILY,
+    monthStart: 4,
+    monthEnd: 11,
+    area: "city",
+    town: "Buffalo",
+    time: "Check today's hours",
+    title: "Buffalo Naval & Military Park",
+    venue: "Buffalo Naval Park · 1 Naval Park Cove",
+    description: "Climb through three real warships at the water's edge — steep ladders and tight hatches, so better for surefooted kids than toddlers.",
+    cost: "Admission · see venue",
+    source: "Buffalo Naval Park",
+    url: "https://buffalonavalpark.org/",
+    tags: ["Ships", "Kids", "Waterfront"],
+    kind: "Museums & culture",
+    setting: "both",
+    audiences: ["kids"],
+    confirm: true,
+    priority: 3,
+  },
+  {
+    idPrefix: "toy-town-museum",
+    dayOfWeek: [2, 3, 4, 5, 6],
+    area: "southtowns",
+    town: "East Aurora",
+    time: "Check today's hours",
+    title: "Toy Town Museum",
+    venue: "Toy Town Museum · 636 Girard Ave",
+    description: "Fisher-Price's home village keeps a small free museum of the toys made here, with a play area aimed squarely at the under-sixes.",
+    cost: "Free · donations welcome",
+    source: "Toy Town Museum",
+    url: "https://www.toytownusa.com/",
+    tags: ["Toys", "Toddlers", "Free"],
+    kind: "Museums & culture",
+    setting: "indoor",
+    audiences: ["toddler", "kids"],
+    confirm: true,
+    priority: 3,
+  },
+  {
+    idPrefix: "vidlers-visit",
+    dayOfWeek: [1, 2, 3, 4, 5, 6],
+    area: "southtowns",
+    town: "East Aurora",
+    time: "Check today's hours",
+    title: "Vidler's 5 & 10",
+    venue: "Vidler's 5 & 10 · 676-694 Main St",
+    description: "Four creaky floors of penny-candy, toys and oddities — a twenty-minute wander that reliably entertains a small child for free.",
+    cost: "Free to browse",
+    source: "Vidler's 5 & 10",
+    url: "https://www.vidlers5and10.com/",
+    tags: ["Free", "Village", "Rain plan"],
+    kind: "Community",
+    setting: "indoor",
+    audiences: ["toddler", "kids", "family"],
+    confirm: true,
+    priority: 3,
+  },
+
+  /* --------------------------------------------------- outside, close by */
+  {
+    idPrefix: "chestnut-ridge-playground",
+    dayOfWeek: DAILY,
+    monthStart: 4,
+    monthEnd: 11,
+    area: "southtowns",
+    town: "Orchard Park",
+    time: "Dawn to dusk",
+    title: "Chestnut Ridge Park Playground & Trails",
+    venue: "Chestnut Ridge Park · 6121 Chestnut Ridge Rd",
+    description: "The closest big playground to the village, with easy stroller paths, the eternal flame trail for older kids and plenty of picnic space.",
+    cost: "Free · parking free",
+    source: "Erie County Parks",
+    url: "https://www2.erie.gov/parks/index.php?q=chestnut-ridge-park",
+    tags: ["Playground", "Free", "Close to home"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    audiences: ["toddler", "kids", "family"],
+    priority: 3,
+  },
+  {
+    idPrefix: "emery-park-playground",
+    dayOfWeek: DAILY,
+    monthStart: 4,
+    monthEnd: 11,
+    area: "southtowns",
+    town: "East Aurora",
+    time: "Dawn to dusk",
+    title: "Emery Park Playground & Creek Walk",
+    venue: "Emery Park · 2084 Emery Rd, South Wales",
+    description: "Shaded picnic groves, a shallow creek small children can paddle in and short flat trails — an easy morning out of the house.",
+    cost: "Free · parking free",
+    source: "Erie County Parks",
+    url: "https://www2.erie.gov/parks/index.php?q=emery-park",
+    tags: ["Playground", "Creek", "Free"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    audiences: ["toddler", "kids", "family"],
+    priority: 3,
+  },
+  {
+    idPrefix: "sprague-brook-playground",
+    dayOfWeek: DAILY,
+    monthStart: 5,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "Boston",
+    time: "Dawn to dusk",
+    title: "Sprague Brook Park Playground",
+    venue: "Sprague Brook Park · 9674 Foote Rd, Glenwood",
+    description: "A big county park with a playground, a creek and wide open grass, quiet enough on a weekday to feel like you have it to yourselves.",
+    cost: "Free · parking free",
+    source: "Erie County Parks",
+    url: "https://www2.erie.gov/parks/index.php?q=sprague-brook-park",
+    tags: ["Playground", "Creek", "Free"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    audiences: ["toddler", "kids", "family"],
+    priority: 3,
+  },
+  {
+    idPrefix: "knox-farm-open",
+    dayOfWeek: DAILY,
+    monthStart: 4,
+    monthEnd: 11,
+    area: "southtowns",
+    town: "East Aurora",
+    time: "Dawn to dusk",
+    title: "Knox Farm State Park",
+    venue: "Knox Farm State Park · 437 Buffalo Rd",
+    description: "Flat mown paths through open meadow and past the old horse barns — one of the easiest walks in the Southtowns with a stroller or a dawdling toddler.",
+    cost: "Free",
+    source: "NY State Parks",
+    url: "https://parks.ny.gov/parks/knoxfarm/",
+    tags: ["Trails", "Stroller-friendly", "Free"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    audiences: ["toddler", "family"],
+    priority: 3,
+  },
+  {
+    idPrefix: "tifft-nature-preserve",
+    dayOfWeek: DAILY,
+    area: "city",
+    town: "Buffalo",
+    time: "Check today's hours",
+    title: "Tifft Nature Preserve Boardwalks",
+    venue: "Tifft Nature Preserve · 1200 Fuhrmann Blvd",
+    description: "Boardwalks over cattail marsh with turtles, herons and a short loop a four-year-old can finish, plus a visitor centre to warm up in.",
+    cost: "Free · parking free",
+    source: "Tifft Nature Preserve",
+    url: "https://www.tifft.org/",
+    tags: ["Nature", "Boardwalk", "Free"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    audiences: ["toddler", "kids", "family"],
+    confirm: true,
+    priority: 3,
+  },
+  {
+    idPrefix: "penn-dixie-dig",
+    dayOfWeek: DAILY,
+    monthStart: 4,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "Blasdell",
+    time: "Check today's hours",
+    title: "Penn Dixie Fossil Park",
+    venue: "Penn Dixie Fossil Park · 4050 North St, Blasdell",
+    description: "Kids keep whatever fossils they crack out of the shale, and the digging is shallow enough for small hands. Close to home and endlessly repeatable.",
+    cost: "Admission · see venue",
+    source: "Penn Dixie Fossil Park",
+    url: "https://penndixie.org/",
+    tags: ["Fossils", "Kids", "Close to home"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    audiences: ["kids", "family"],
+    confirm: true,
+    priority: 4,
+  },
+  {
+    idPrefix: "woodlawn-beach",
+    dayOfWeek: DAILY,
+    monthStart: 6,
+    monthEnd: 9,
+    area: "southtowns",
+    town: "Blasdell",
+    time: "Dawn to dusk",
+    title: "Woodlawn Beach State Park",
+    venue: "Woodlawn Beach State Park · 3580 Lake Shore Rd",
+    description: "Shallow, sandy and close — a nature centre, a boardwalk and enough beach for a bucket-and-spade afternoon without the drive to the lake.",
+    cost: "Free · vehicle fee in season",
+    source: "NY State Parks",
+    url: "https://parks.ny.gov/parks/woodlawnbeach/",
+    tags: ["Beach", "Sand", "Toddlers"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    audiences: ["toddler", "kids", "family"],
+    priority: 3,
+  },
+  {
+    idPrefix: "como-lake-playground",
+    dayOfWeek: DAILY,
+    monthStart: 4,
+    monthEnd: 11,
+    area: "southtowns",
+    town: "Lancaster",
+    time: "Dawn to dusk",
+    title: "Como Lake Park Playground",
+    venue: "Como Lake Park · 2220 Como Park Blvd",
+    description: "Playgrounds, a creek and long flat paths under old trees, with enough shelters that a picnic survives a shower.",
+    cost: "Free · parking free",
+    source: "Erie County Parks",
+    url: "https://www2.erie.gov/parks/index.php?q=como-lake-park",
+    tags: ["Playground", "Picnic", "Free"],
+    kind: "Outdoors",
+    setting: "outdoor",
+    audiences: ["toddler", "kids", "family"],
+    priority: 3,
+  },
+
+  /* ------------------------------------------- autumn on the farm (Sep–Oct) */
+  {
+    idPrefix: "great-pumpkin-farm",
+    dayOfWeek: DAILY,
+    monthStart: 9,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "Clarence",
+    time: "Check today's hours",
+    title: "Great Pumpkin Farm",
+    venue: "Great Pumpkin Farm · 11199 Main St, Clarence",
+    description: "The region's big autumn farm: pumpkin picking, a corn maze, wagon rides, animals and a midway of small-kid rides through October.",
+    cost: "Admission · see venue",
+    source: "Great Pumpkin Farm",
+    url: "https://greatpumpkinfarm.com/",
+    tags: ["Pumpkins", "Corn maze", "Autumn"],
+    kind: "Fairs & festivals",
+    setting: "outdoor",
+    audiences: ["toddler", "kids", "family"],
+    confirm: true,
+    priority: 4,
+  },
+  {
+    idPrefix: "awald-farms-fall",
+    dayOfWeek: WEEKEND,
+    monthStart: 9,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "North Collins",
+    time: "Check today's hours",
+    title: "Awald Farms Corn Maze & Pumpkins",
+    venue: "Awald Farms · 2195 Brant North Collins Rd",
+    description: "A Southtowns farm's autumn weekend: corn maze, wagon rides out to the pumpkin field and a play area for children too small for the maze.",
+    cost: "See venue",
+    source: "Awald Farms",
+    url: "https://www.awaldfarms.com/",
+    tags: ["Pumpkins", "Corn maze", "Autumn"],
+    kind: "Fairs & festivals",
+    setting: "outdoor",
+    audiences: ["toddler", "kids", "family"],
+    confirm: true,
+    priority: 4,
+  },
+  {
+    idPrefix: "kellys-country-store",
+    dayOfWeek: DAILY,
+    monthStart: 9,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "Eden",
+    time: "Check today's hours",
+    title: "Kelly's Country Store · Autumn on the Farm",
+    venue: "Kelly's Country Store · 3122 Sandrock Rd, Eden",
+    description: "A working Eden farm store with animals, a play barn, pumpkins and cider — a gentler autumn outing than the big corn-maze farms.",
+    cost: "See venue",
+    source: "Kelly's Country Store",
+    url: "https://www.kellyscountrystore.com/",
+    tags: ["Farm", "Animals", "Autumn"],
+    kind: "Markets & food",
+    setting: "both",
+    audiences: ["toddler", "kids", "family"],
+    confirm: true,
+    priority: 3,
+  },
+  {
+    idPrefix: "thorpes-organic-farm",
+    dayOfWeek: WEEKEND,
+    monthStart: 9,
+    monthEnd: 10,
+    area: "southtowns",
+    town: "East Aurora",
+    time: "Check today's hours",
+    title: "Thorpe's Organic Family Farm",
+    venue: "Thorpe's Organic Family Farm · 11175 Sharp St, East Aurora",
+    description: "Pick-your-own fields, farm animals and a straw-bale play area, small enough that a two-year-old is not overwhelmed.",
+    cost: "See venue",
+    source: "Thorpe's Organic Family Farm",
+    url: "https://www.thorpesorganicfamilyfarm.com/",
+    tags: ["Farm", "Pick your own", "Autumn"],
+    kind: "Markets & food",
+    setting: "outdoor",
+    audiences: ["toddler", "kids", "family"],
+    confirm: true,
+    priority: 3,
+  },
+  {
+    idPrefix: "mayer-brothers-cider",
+    dayOfWeek: DAILY,
+    monthStart: 9,
+    monthEnd: 11,
+    area: "southtowns",
+    town: "West Seneca",
+    time: "Check today's hours",
+    title: "Mayer Brothers Cider Mill",
+    venue: "Mayer Brothers Cider Mill · 3300 Union Rd, West Seneca",
+    description: "Cider and hot doughnuts fifteen minutes from home — a short, cheap autumn outing that works when nobody has the stamina for a farm.",
+    cost: "See venue",
+    source: "Mayer Brothers",
+    url: "https://mayerbros.com/",
+    tags: ["Cider", "Doughnuts", "Autumn"],
+    kind: "Markets & food",
+    setting: "indoor",
+    audiences: ["toddler", "family"],
+    confirm: true,
+    priority: 3,
   },
 ];
 
@@ -1179,7 +1688,6 @@ type SpecificFeatured = {
   time: string;
   title: string;
   venue: string;
-  distance: number;
   description: string;
   cost: string;
   source: string;
@@ -1189,6 +1697,12 @@ type SpecificFeatured = {
   setting: EventSetting;
   priority: number;
 };
+
+function runsOn(template: RecurringTemplate, dayOfWeek: number) {
+  return typeof template.dayOfWeek === "number"
+    ? template.dayOfWeek === dayOfWeek
+    : template.dayOfWeek.includes(dayOfWeek);
+}
 
 function generateDynamicRecurringEvents(todayKey: string, endKey: string): LiveEvent[] {
   const events: LiveEvent[] = [];
@@ -1200,8 +1714,8 @@ function generateDynamicRecurringEvents(todayKey: string, endKey: string): LiveE
     const dayOfWeek = d.getUTCDay();
     const month = d.getUTCMonth() + 1;
 
-    for (const template of RECURRING_TEMPLATES) {
-      if (template.dayOfWeek === dayOfWeek) {
+    for (const template of [...RECURRING_TEMPLATES, ...KID_STAPLES]) {
+      if (runsOn(template, dayOfWeek)) {
         if (template.monthStart && template.monthEnd) {
           if (month < template.monthStart || month > template.monthEnd) continue;
         }
@@ -1215,7 +1729,9 @@ function generateDynamicRecurringEvents(todayKey: string, endKey: string): LiveE
           day,
           date,
           dateKey: current,
-          time: template.time,
+          // Enforced here rather than trusted to the data: an entry flagged
+          // `confirm` can never print a clock time it has not verified today.
+          time: template.confirm ? "Check today's hours" : template.time,
           title: template.title,
           venue: template.venue,
           ...place(template.venue, template.town),
@@ -1224,11 +1740,12 @@ function generateDynamicRecurringEvents(todayKey: string, endKey: string): LiveE
           source: template.source,
           url: template.url,
           mapUrl: mapUrl(template.venue, template.town),
-          tags: template.tags,
+          tags: template.confirm ? [...template.tags, "Confirm hours"] : template.tags,
           accent: ["coral", "sun", "mint", "sky", "purple"][(events.length + dayOffset) % 5],
           today: current === todayKey,
           kind: template.kind,
           setting: template.setting,
+          audiences: template.audiences ?? deriveAudiences(template.title, template.description, template.tags),
           priority: template.priority,
         });
       }
@@ -1270,7 +1787,6 @@ function featuredMajorEvents(todayKey: string, endKey: string): LiveEvent[] {
       time: "11 AM–10 PM · midway noon–11",
       title: "Erie County Fair",
       venue: "Hamburg Fairgrounds · 5600 McKinley Pkwy",
-      distance: 6,
       description: "The Southtowns' giant annual fair packs rides, farm animals, 4-H exhibits, food, live entertainment and special daily programs into one full-day outing.",
       cost: "$19 adult · 12 & under free · special-day discounts",
       source: "Erie County Fair",
@@ -1289,7 +1805,6 @@ function featuredMajorEvents(todayKey: string, endKey: string): LiveEvent[] {
       time: "10 AM–5 PM · shows noon & 2",
       title: "Destination Dinosaur",
       venue: "Buffalo Zoo",
-      distance: 17,
       description: "Walk among life-size animatronic dinosaurs, dig for fossils and catch two educational dino shows during a flexible zoo day.",
       cost: "$25.95 adult · $19.95 child",
       source: "Buffalo Zoo",
@@ -1315,25 +1830,82 @@ function featuredMajorEvents(todayKey: string, endKey: string): LiveEvent[] {
       today: dateKey === todayKey,
       mapUrl: mapUrl(item.venue, item.town),
       accent: ["coral", "sun", "mint", "sky", "purple"][index % 5],
+      audiences: deriveAudiences(item.title, item.description, item.tags),
     }));
   });
 }
 
+/**
+ * A dozen library programmes a day, chosen rather than truncated.
+ *
+ * B&ECPL runs more children's programming than every other source combined, and
+ * this used to keep 32 of it for the entire eight-day window — which is where
+ * "three things for kids today" came from. But the answer is not thirty
+ * storytimes either: the point is a good short list, so the day's slots go to
+ * the closest young-kid programmes and no branch takes more than a couple.
+ */
+const LIBRARY_PER_DAY = 12;
+const LIBRARY_PER_VENUE_DAY = 2;
+
 function capLibraries(events: LiveEvent[]) {
-  const library = events.filter((event) => event.kind === "Library").sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.distance - b.distance);
+  const library = events
+    .filter((event) => event.kind === "Library")
+    .sort((a, b) => a.dateKey.localeCompare(b.dateKey) || kidScore(b.audiences) - kidScore(a.audiences) || a.distance - b.distance);
   const nonLibrary = events.filter((event) => event.kind !== "Library");
-  const byVenue = new Map<string, number>();
-  const byDayArea = new Map<string, number>();
+  const byVenueDay = new Map<string, number>();
+  const byDay = new Map<string, number>();
   const selected = library.filter((event) => {
-    const venueCount = byVenue.get(event.venue) ?? 0;
-    const dayAreaKey = `${event.dateKey}|${event.area}`;
-    const dayAreaCount = byDayArea.get(dayAreaKey) ?? 0;
-    if (venueCount >= 3 || dayAreaCount >= 3) return false;
-    byVenue.set(event.venue, venueCount + 1);
-    byDayArea.set(dayAreaKey, dayAreaCount + 1);
+    const venueDayKey = `${event.dateKey}|${event.venue}`;
+    const venueCount = byVenueDay.get(venueDayKey) ?? 0;
+    const dayCount = byDay.get(event.dateKey) ?? 0;
+    if (venueCount >= LIBRARY_PER_VENUE_DAY || dayCount >= LIBRARY_PER_DAY) return false;
+    byVenueDay.set(venueDayKey, venueCount + 1);
+    byDay.set(event.dateKey, dayCount + 1);
     return true;
-  }).slice(0, 32);
+  });
   return [...nonLibrary, ...selected];
+}
+
+/**
+ * No single source may own a day.
+ *
+ * The library cap above is the specific case; this is the general policy, and it
+ * applies to whichever feed happens to be the firehose next. Applied after the
+ * final sort, so what survives is each source's best material for that day.
+ *
+ * The floor matters as much as the share: a thin Monday is the day that needs
+ * every listing it can get, so the cap only starts biting once a day is busy
+ * enough that a quarter of it is more than the floor anyway.
+ */
+const MAX_SOURCE_SHARE = 0.25;
+const MIN_SOURCE_PER_DAY = 25;
+
+function capBySource(sorted: LiveEvent[]) {
+  const dayTotals = new Map<string, number>();
+  for (const event of sorted) dayTotals.set(event.dateKey, (dayTotals.get(event.dateKey) ?? 0) + 1);
+
+  const taken = new Map<string, number>();
+  return sorted.filter((event) => {
+    const allowance = Math.max(MIN_SOURCE_PER_DAY, Math.round((dayTotals.get(event.dateKey) ?? 0) * MAX_SOURCE_SHARE));
+    const key = `${event.dateKey}|${event.source}`;
+    const used = taken.get(key) ?? 0;
+    if (used >= allowance) return false;
+    taken.set(key, used + 1);
+    return true;
+  });
+}
+
+/** A busy Saturday must not spend the whole week's budget. */
+const MAX_PER_DAY = 170;
+
+function capPerDay(sorted: LiveEvent[]) {
+  const perDay = new Map<string, number>();
+  return sorted.filter((event) => {
+    const count = perDay.get(event.dateKey) ?? 0;
+    if (count >= MAX_PER_DAY) return false;
+    perDay.set(event.dateKey, count + 1);
+    return true;
+  });
 }
 
 const TITLE_STOPWORDS = new Set(["the", "and", "for", "with", "annual", "village", "town", "city", "series", "event", "events", "of", "at", "in", "on", "a", "an"]);
@@ -1411,10 +1983,10 @@ const CACHE_TTL_SECONDS = 2 * 3600;
 const CACHE_GRACE_SECONDS = 6 * 3600;
 /** The safety net keeps a week, so a multi-day outage still has real listings. */
 const LAST_GOOD_TTL_SECONDS = 7 * 24 * 3600;
-// Eight days at an 80-card Step Out allowance plus municipal/library feeds can
-// legitimately exceed 600. Keep a generous payload ceiling so later week days
-// are not truncated after the first few busy dates.
-const MAX_EVENTS = 1_000;
+// Eight days of a fully-stocked calendar — a hundred-odd listings on the good
+// days — plus the standing kid venues. `capPerDay` is what actually shapes a
+// day; this only stops the tail of the week being truncated by the front.
+const MAX_EVENTS = 1_400;
 const FULL_CACHE_CONTROL = {
   browser: "public, max-age=60, must-revalidate",
   cdn: "public, max-age=300, stale-while-revalidate=60",
@@ -1432,7 +2004,7 @@ const DEGRADED_CACHE_CONTROL = {
 };
 
 function cacheKeyFor(todayKey: string) {
-  return `events:balanced-v11:${todayKey}`;
+  return `events:balanced-v12:${todayKey}`;
 }
 
 /**
@@ -1443,7 +2015,7 @@ function cacheKeyFor(todayKey: string) {
  * — a hardcoded copy from months ago. Yesterday's real listings are wrong
  * about which day it is; the snapshot is wrong about everything.
  */
-const LAST_GOOD_KEY = "events:balanced-v11:last-good";
+const LAST_GOOD_KEY = "events:balanced-v12:last-good";
 const REFRESH_LOCK_SECONDS = maxDuration + 5;
 
 function validPayload(value: unknown): EventsPayload | null {
@@ -1602,6 +2174,27 @@ async function fetchVisitBuffaloPages(url: string, todayKey: string, endKey: str
   return [firstText, ...pages].join("\n");
 }
 
+/**
+ * LibCal's RSS answers for one month at a time, so from the 24th onward the tail
+ * of the eight-day window simply is not in the feed — the last days of the month
+ * used to show a week that ran out of library programming early. Ask for the
+ * next month as well and let `dedupe` absorb any overlap.
+ *
+ * Best effort by design: the `d` parameter is unverified, and a failure here
+ * leaves the source healthy on the month we did get rather than reporting an
+ * outage. Both documents are concatenated because `parseLibrary` scans for
+ * `<item>` blocks and does not care about document boundaries.
+ */
+async function fetchNextMonthLibrary(url: string, todayKey: string, endKey: string, headers: HeadersInit) {
+  if (todayKey.slice(0, 7) === endKey.slice(0, 7)) return "";
+  try {
+    return await fetchWithTimeout(`${url}&d=${endKey.slice(0, 7)}-01`, headers, FEED_TIMEOUT_MS);
+  } catch {
+    console.info("[events] library next-month rollover unavailable");
+    return "";
+  }
+}
+
 async function buildEventsPayload(): Promise<EventsPayload> {
   const todayKey = localDateKey();
   const endKey = addDays(todayKey, 7);
@@ -1613,12 +2206,13 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     ...LIBRARY_FEEDS.map(async ([name, url]) => {
       const started = Date.now();
       const text = await fetchWithTimeout(url, headers, FEED_TIMEOUT_MS);
-      return { name, kind: "library" as const, text, durationMs: Date.now() - started };
+      const rollover = await fetchNextMonthLibrary(url, todayKey, endKey, headers);
+      return { name, kind: "library" as const, text: `${text}${rollover}`, durationMs: Date.now() - started };
     }),
     ...TRIBE_FEEDS.map(async ([name, origin, area, town]) => {
       const started = Date.now();
       const text = await fetchTribePages(origin, todayKey, endKey, headers);
-      return { name, kind: "tribe" as const, area: area as "southtowns" | "city", town, regional: name === "Buffalo Rising", text, durationMs: Date.now() - started };
+      return { name, kind: "tribe" as const, area: area as "southtowns" | "city", town, regional: REGIONAL_TRIBE_FEEDS.has(name), text, durationMs: Date.now() - started };
     }),
     ...ICS_FEEDS.map(async ([name, url, area]) => {
       const started = Date.now();
@@ -1719,9 +2313,10 @@ async function buildEventsPayload(): Promise<EventsPayload> {
     }
     return [parsed.data];
   });
-  const normalized = capLibraries(dedupe(validEvents)).sort(
+  const ranked = capLibraries(dedupe(validEvents)).sort(
     (a, b) => a.dateKey.localeCompare(b.dateKey) || b.priority - a.priority || a.distance - b.distance || a.time.localeCompare(b.time)
-  ).slice(0, MAX_EVENTS);
+  );
+  const normalized = capPerDay(capBySource(ranked)).slice(0, MAX_EVENTS);
 
   // 4. Give image-less events a real preview picture where the source page has one
   const needImages = normalized.filter((event) => !event.image);

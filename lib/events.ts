@@ -1,5 +1,9 @@
 import { z } from "zod";
+import { EVENT_AUDIENCES } from "./audience.ts";
 import { isAllowedEventImage } from "./image-hosts.ts";
+
+export { EVENT_AUDIENCES };
+export type { EventAudience } from "./audience.ts";
 
 export const AREAS = ["southtowns", "city"] as const;
 export const EVENT_KINDS = [
@@ -17,6 +21,7 @@ export const DISTANCE_PRECISIONS = ["venue", "town", "region"] as const;
 
 export const areaSchema = z.enum(AREAS);
 export const eventKindSchema = z.enum(EVENT_KINDS);
+export const eventAudienceSchema = z.enum(EVENT_AUDIENCES);
 export const eventSettingSchema = z.enum(EVENT_SETTINGS);
 export const distancePrecisionSchema = z.enum(DISTANCE_PRECISIONS);
 const webUrlSchema = z.url().max(2_048).refine((value) => /^https?:\/\//i.test(value), "Expected an HTTP(S) URL");
@@ -45,6 +50,8 @@ export const liveEventSchema = z.object({
   today: z.boolean().optional(),
   kind: eventKindSchema,
   setting: eventSettingSchema,
+  /** Who the event is for. Empty means "nothing about this says children". */
+  audiences: z.array(eventAudienceSchema).max(4).default([]),
   priority: z.number().finite().min(0).max(100),
   lat: z.number().finite().min(-90).max(90),
   lon: z.number().finite().min(-180).max(180),
@@ -73,7 +80,7 @@ export const sourceHealthSchema = z.object({
 });
 
 export const eventsPayloadSchema = z.object({
-  events: z.array(liveEventSchema).max(1_000),
+  events: z.array(liveEventSchema).max(1_400),
   count: z.number().int().nonnegative(),
   updatedAt: z.iso.datetime(),
   window: z.object({ from: z.iso.date(), to: z.iso.date() }),

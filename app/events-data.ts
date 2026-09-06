@@ -3,10 +3,10 @@ import type { EventKind as ActivityKind, LiveEvent } from "../lib/events";
 export type { Area } from "../lib/events";
 export type EventKind = "All activities" | ActivityKind;
 export type SettingFilter = "all" | "indoor" | "outdoor";
-export type Vibe = "all" | "outside" | "kids" | "food" | "evening" | "rain" | "drive";
+export type Vibe = "all" | "outside" | "toddler" | "kids" | "food" | "evening" | "rain" | "drive";
 export type Sort = "recommended" | "closest";
 
-type OptionalLiveFields = "dateKey" | "kind" | "setting" | "priority" | "lat" | "lon" | "distancePrecision";
+type OptionalLiveFields = "dateKey" | "kind" | "setting" | "audiences" | "priority" | "lat" | "lon" | "distancePrecision";
 /** Fallback snapshots predate the normalized live contract, so enrichment fields remain optional only here. */
 export type EventPick = Omit<LiveEvent, OptionalLiveFields> & Partial<Pick<LiveEvent, OptionalLiveFields>>;
 

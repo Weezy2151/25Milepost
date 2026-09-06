@@ -1,8 +1,10 @@
 # The 25-Mile Post
 
-A handpicked morning guide to family events happening today and this week
-within about 25 miles of Orchard Park, New York. Built with the Next.js App
-Router and deployable on Vercel.
+A morning guide to family events happening today and this week within about 25
+miles of Orchard Park, New York — broad enough to filter rather than short
+enough to read end to end, with an explicit answer to "what is there for a
+three-year-old today?". Built with the Next.js App Router and deployable on
+Vercel.
 
 ## Prerequisites
 
@@ -27,12 +29,17 @@ Then open `http://localhost:3000`.
   photos use Next.js image optimization directly; the optimizer's remote-host
   allowlist is shared with the server-side URL validator, so untrusted image
   origins are discarded before they reach the page.
-- `app/api/events/route.ts` fetches thirteen live sources — library RSS, three
-  Events Calendar REST APIs, four iCalendar feeds and four scraped HTML
-  listings — merges in known
+- `app/api/events/route.ts` fetches seventeen live sources — three library RSS
+  feeds, five Events Calendar REST APIs, five iCalendar feeds and four scraped
+  HTML listings — merges in known
   recurring/seasonal events where no live feed already covers them, geocodes
   venues (`lib/geo.ts`), cleans descriptions and resolves preview images
   (`lib/enrich.ts`), and returns the combined, deduped, sorted list.
+- `lib/audience.ts` resolves who each event is for (`toddler`, `kids`, `teen`,
+  `family`) from whatever the source published — LibCal's own audience list,
+  Events Calendar categories, Erie County Parks' "Kids & Families" label — and
+  falls back to the title and description only when a source says nothing. The
+  page's kid filters read that field rather than guessing from card text.
 - `db/cache.ts` caches that combined payload for two hours — in a shared Redis
   store if one is configured, in memory otherwise. Entries stay servable for
   six hours past that window, so an expired payload is returned immediately while
@@ -50,24 +57,49 @@ Fetched live on each refresh (see the feed tables at the top of
 
 | Source | Format | Covers |
 | --- | --- | --- |
-| Buffalo & Erie County Public Library (2 feeds) | LibCal RSS | Branch programs across Erie County |
+| Buffalo & Erie County Public Library (3 feeds) | LibCal RSS | Branch programs across Erie County |
 | EverythingOP | Events Calendar REST | Orchard Park village and town |
 | Orchard Park Chamber | Events Calendar REST | Home-town festivals, Oktoberfest, the arts expo |
 | Buffalo Rising | Events Calendar REST | Regional festivals, concerts, tours |
+| Buffalo Olmsted Parks | Events Calendar REST | Park movie nights and family programming |
+| Explore Buffalo | Events Calendar REST | Walking tours, including the children's ones |
 | Town of Orchard Park | iCalendar | Town meetings and rec events |
 | Town of Evans | iCalendar | Evans / Angola / Derby |
+| Town of West Seneca | iCalendar (CivicPlus) | Town recreation programming |
 | Southtowns Regional Chamber | iCalendar | Hamburg and Southtowns business events |
 | Explore & More | iCalendar | Children's museum programming |
 | Step Out Buffalo | Scraped HTML | Trivia, bar bingo, brewery tastings, open mics |
+| Visit Buffalo | Scraped HTML | Regional visitor-bureau listings |
 | East Aurora Chamber | Scraped HTML (schema.org) | East Aurora village events |
 | Erie County Parks | Scraped HTML (Drupal view) | Ranger-led hikes, kids-and-families and nature programs |
 
-Two hand-maintained layers sit alongside them: `RECURRING_TEMPLATES` (weekly
-seasonal staples) and `featuredMajorEvents` (a short marquee list). Recurring
-templates are a **fallback** — `dropSupersededRecurring` removes any template
-entry that a live feed already covers that day, so the live copy wins. The
-featured list cannot refresh itself, so `FEATURED_REVIEWED_THROUGH` logs a
-warning once it goes stale.
+The last five rows of the table's REST/iCal/LibCal entries — Buffalo Olmsted
+Parks, Explore Buffalo, Town of West Seneca, and the un-scoped B&ECPL calendar —
+were added on 2026-09-06 **without being probed live**, from the URL shape their
+CMS publishes. They fail soft, so a dead one costs nothing but a row in
+`/api/health` and a "didn't respond" line on the page. Check the payload's
+`sources` array after a deploy and delete any that error or stay at `count: 0`.
+
+Three hand-maintained layers sit alongside the feeds: `RECURRING_TEMPLATES`
+(weekly seasonal staples), `KID_STAPLES` (standing places to take a small child)
+and `featuredMajorEvents` (a short marquee list). The first two are a
+**fallback** — `dropSupersededRecurring` removes any entry that a live feed
+already covers that day, so the live copy wins. The featured list cannot refresh
+itself, so `FEATURED_REVIEWED_THROUGH` logs a warning once it goes stale.
+
+### Kid staples, and the rule that keeps them honest
+
+The live feeds are good at *events* and blind to what a parent of a
+three-year-old actually needs on a wet Tuesday: somewhere open. `KID_STAPLES`
+carries those — indoor play, museum open hours, the county park playgrounds,
+autumn farms — for venues that publish no machine-readable calendar.
+
+An entry marked `confirm: true` is standing programming whose hours were not
+read off a live listing today. The generator, not the data, enforces what that
+means: the card prints `Check today's hours` instead of a clock time, gains a
+"Confirm hours" tag and links the venue's own page. **A staple never asserts a
+schedule.** They also rank below every live listing, so a real calendar entry
+always outranks the standing one.
 
 ### Optional: Ticketmaster
 
@@ -117,8 +149,9 @@ does, so `lib/scrape.ts` parses their rendered HTML:
   is not certain are left unmapped and their events are dropped.
 
 All three are regional listings, so `parseScraped` drops anything it cannot
-place in a known town, and caps each scraped source at four events a day so a
-single night of bar events cannot crowd out the rest of the list. Step Out Buffalo's
+place in a known town, and caps each scraped source per day — 40 for Step Out,
+24 for Erie County Parks, 20 for the rest — so a single night of bar events
+cannot crowd out the rest of the list. Step Out Buffalo's
 pages also mix real events with standing restaurant promotion, so a listing has
 to read as an event by its title or the site's own category label to be kept —
 see `NIGHTLIFE_EVENT` and `STANDING_PROMOTION` in the route.
@@ -134,6 +167,32 @@ calendar at `eastaurora.gov` is board and commission meetings only, the Roycroft
 Campus runs The Events Calendar but has posted nothing since 2025, and
 `eastauroraevents.com` is one venue rather than a calendar — its weekend flea
 market is carried as a recurring template instead.
+
+### How a day gets shaped
+
+The supply problem was never that too little was fetched — it was that most of
+what arrived was thrown away, and the library feed took the worst of it. Three
+caps now decide what a day looks like, applied in this order:
+
+1. **`capLibraries`** keeps `LIBRARY_PER_DAY` (12) library programmes a day, at
+   most `LIBRARY_PER_VENUE_DAY` (2) per branch, chosen by kid relevance and then
+   distance. It used to keep 32 for the *entire eight-day window*, which is why
+   a Tuesday offered three things for a child. Twelve well-chosen ones is the
+   goal — the point is a good short list, not thirty storytimes.
+2. **`capBySource`** stops any one source owning a day: no more than
+   `MAX_SOURCE_SHARE` (25%) of the day's listings, floored at
+   `MIN_SOURCE_PER_DAY` (25). The floor matters as much as the share — a thin
+   Monday is the day that needs every listing it can get, so the cap only bites
+   once a day is busy enough that a quarter of it exceeds the floor. The library
+   cap is the specific case; this is the general policy, and it applies to
+   whichever feed becomes the firehose next.
+3. **`capPerDay`** holds a day to `MAX_PER_DAY` (170), so one enormous Saturday
+   cannot spend the payload budget the rest of the week needs.
+
+`branchInfo` names the B&ECPL campuses whose titles hide their town; anything
+else is placed by reading the town out of the campus name, so a new or renamed
+branch still resolves. That widens the pool `capLibraries` chooses its twelve
+from rather than the number it emits.
 
 ### Categories still missing
 
@@ -155,8 +214,9 @@ deliberately absent rather than half-filled with guesses, checked 2026-08-23:
 Also checked and rejected: the Buffalo Zoo, the Aquarium of Niagara and the
 Erie County Fair all 403 both their REST and iCal endpoints; the Botanical
 Gardens has no calendar index; Visit Buffalo Niagara sits behind a bot
-challenge. Explore Buffalo's Events Calendar REST API does answer, but has
-posted nothing — worth revisiting when their tour season opens.
+challenge. Several of these are now carried as `KID_STAPLES` instead — a venue
+that will not publish a calendar can still be somewhere to go, as long as the
+card does not pretend to know today's hours.
 
 ## Deploying to Vercel
 

@@ -97,7 +97,7 @@ const OG_TIMEOUT_MS = 2500;
 /** Hard ceiling per refresh so a slow source can never stall the whole payload. */
 const OG_BUDGET = 12;
 /** Avoid one Redis REST read for every item in a pathological feed. */
-const OG_CACHE_LOOKUP_BUDGET = 48;
+const OG_CACHE_LOOKUP_BUDGET = 200;
 
 function ogKey(url: string) {
   return `og:${createHash("sha256").update(url).digest("base64url")}`;
