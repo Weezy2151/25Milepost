@@ -493,18 +493,20 @@ export default function Home() {
   const closeThisWeek = baseFiltered.filter((event) => event.distance <= 5).length;
 
   /**
-   * The forecast for the day on screen.
+   * The forecast the advisory speaks about.
    *
    * The advisory used to key off today's rain no matter which day you were
    * browsing, so a wet Wednesday told you to plan indoors for a sunny
-   * Saturday. Everything weather-facing below reads this instead.
+   * Saturday. On a single day it reads that day. Across the whole week there
+   * is no one day to read, so it names the next wet one rather than going
+   * quiet — the week view is where a rainy Wednesday is worth knowing early.
    */
-  const dayForecast = useMemo(
-    () => activeDay ? dayWeather.get(activeDay) ?? null : null,
-    [dayWeather, activeDay],
-  );
-  const viewingToday = activeDay === todayKey;
-  const rainLikely = dayForecast !== null && dayForecast.rain >= 40;
+  const advisoryDay = activeDay
+    ? activeDayMeta
+    : days.find((day) => (dayWeather.get(day.dateKey)?.rain ?? 0) >= 40);
+  const advisoryForecast = advisoryDay ? dayWeather.get(advisoryDay.dateKey) ?? null : null;
+  const rainLikely = advisoryForecast !== null && advisoryForecast.rain >= 40;
+  const advisoryIsToday = advisoryDay?.dateKey === todayKey;
 
   /* ---- actions ---- */
 
@@ -712,9 +714,12 @@ export default function Home() {
                 <div><b>{freeThisWeek}</b><span>free picks</span></div>
                 <div><b>{closeThisWeek}</b><span>within 5 miles</span></div>
               </div>
+              {/* A stale payload is already on screen while its rebuild runs, so say
+                  so here rather than leaving the timestamp looking current. */}
               <p>
                 {loading ? "Loading live calendars…" : feed.state === "live" ? `${feed.ok} of ${feed.total} calendars checked` : "Showing the latest saved listings"}
                 {updatedAt ? ` · updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}
+                {freshness?.state === "stale" ? " · refreshing now" : ""}
               </p>
             </aside>
           </div>
@@ -769,10 +774,10 @@ export default function Home() {
                 <p>
                   🌧️{" "}
                   <strong>
-                    {dayForecast!.rain}% chance of rain{" "}
-                    {viewingToday ? "today" : `on ${activeDayMeta?.date ?? "that day"}`}.
+                    {advisoryForecast!.rain}% chance of rain{" "}
+                    {advisoryIsToday ? "today" : `on ${advisoryDay?.date ?? "that day"}`}.
                   </strong>{" "}
-                  Good {viewingToday ? "day" : "one"} for libraries, museums, play cafés and indoor games.
+                  Good {advisoryIsToday ? "day" : "one"} for libraries, museums, play cafés and indoor games.
                 </p>
                 <button
                   type="button"
@@ -921,7 +926,7 @@ export default function Home() {
 
         {/* ------------------------------------------------------ spotlight */}
         {showSpotlight && (
-          <section className="wrap section shortlist" aria-label="Three good places to start">
+          <section className="wrap section" aria-label="Three good places to start">
             <div className="section-head">
               <div>
                 <p className="eyebrow">Skip the scrolling</p>
@@ -954,7 +959,7 @@ export default function Home() {
         )}
 
         {/* -------------------------------------------------------- results */}
-        <section className="wrap section results-section" id="results" tabIndex={-1} aria-label={activeDayMeta ? `Events on ${activeDayMeta.date}` : "Events this week"}>
+        <section className="wrap section" id="results" tabIndex={-1} aria-label={activeDayMeta ? `Events on ${activeDayMeta.date}` : "Events this week"}>
           <div className="section-head">
             <div>
               <p className="eyebrow">{activeDay === null ? "Everything in one place" : activeDay === todayKey ? "Today" : "Plan ahead"}</p>

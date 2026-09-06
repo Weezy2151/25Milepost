@@ -291,8 +291,6 @@ button { margin: 0; background: none; cursor: pointer; }
   box-shadow: 0 0 0 3px var(--good-soft);
   flex: none;
 }
-.live-dot.busy { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: pulse 1.2s ease-in-out infinite; }
-@keyframes pulse { 50% { opacity: 0.35; } }
 
 /* ============================================================
    Hero
@@ -306,13 +304,6 @@ button { margin: 0; background: none; cursor: pointer; }
     linear-gradient(180deg, var(--bg-tint) 0%, var(--bg) 100%);
   border-bottom: 1px solid var(--line);
 }
-.hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 40px;
-  align-items: start;
-}
-.hero-grid > * { min-width: 0; }
 .week-hero {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(290px, 0.65fr);
@@ -341,7 +332,14 @@ button { margin: 0; background: none; cursor: pointer; }
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
-.intent-block .moods { margin-top: 10px; }
+.intent-block .moods {
+  /* These chips are the hero's primary "what sounds good?" control now, so on a
+     wide screen they wrap into view rather than hiding the last one past the
+     edge of a scroller with no visible scrollbar. */
+  flex-wrap: wrap;
+  margin-top: 10px;
+  overflow-x: visible;
+}
 .week-glance {
   overflow: hidden;
   border: 1px solid var(--line);
@@ -383,19 +381,6 @@ button { margin: 0; background: none; cursor: pointer; }
   font-size: 11px;
   font-weight: 600;
 }
-.hero-title {
-  margin: 12px 0 0;
-  font-size: clamp(38px, 5.2vw, 60px);
-}
-.hero-sub {
-  max-width: 54ch;
-  margin: 14px 0 0;
-  color: var(--text-2);
-  font-size: 16.5px;
-  line-height: 1.55;
-}
-.hero-sub b { color: var(--text); font-weight: 700; }
-
 /* Search ---------------------------------------------------- */
 .search {
   display: flex;
@@ -467,69 +452,6 @@ button { margin: 0; background: none; cursor: pointer; }
   border-color: var(--text);
   color: var(--bg);
 }
-
-/* Weather panel --------------------------------------------- */
-.aside-stack { display: flex; flex-direction: column; gap: 12px; }
-
-.wcard {
-  min-height: 268px;
-  padding: 20px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-1);
-}
-.wcard-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-3);
-  font: 800 10px/1 var(--sans);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-.wcard-temp {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-top: 12px;
-}
-.wcard-temp b { font: 700 42px/1 var(--serif); letter-spacing: -0.04em; }
-.wcard-temp span { color: var(--text-2); font-size: 14px; font-weight: 700; }
-.wcard-rows { margin-top: 14px; border-top: 1px solid var(--line); }
-.wcard-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-  font-size: 12.5px;
-  color: var(--text-2);
-  border-bottom: 1px solid var(--line);
-}
-.wcard-row:last-child { border-bottom: 0; }
-.wcard-row b { color: var(--text); font-weight: 700; }
-
-.weather-skeleton {
-  display: grid;
-  gap: 12px;
-  margin-top: 14px;
-}
-.weather-skeleton > * {
-  display: block;
-  height: 12px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
-  background-size: 400% 100%;
-  animation: shimmer 1.4s ease-in-out infinite;
-}
-.weather-skeleton > :nth-child(1) { width: 42%; }
-.weather-skeleton > :nth-child(2) { width: 58%; height: 42px; margin-bottom: 2px; }
-.weather-skeleton > :nth-child(n + 3) { width: 100%; }
-
-.glance { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
-.glance-cell { padding: 14px 12px; background: var(--surface); text-align: center; }
-.glance-cell b { display: block; font: 700 24px/1 var(--serif); letter-spacing: -0.03em; }
-.glance-cell span { display: block; margin-top: 5px; color: var(--text-3); font: 700 10px/1.2 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
 
 /* Skip link -------------------------------------------------- */
 .skip-link {
@@ -919,7 +841,6 @@ button { margin: 0; background: none; cursor: pointer; }
 }
 
 .week-list { display: flex; flex-direction: column; gap: 38px; }
-.day-group { scroll-margin-top: calc(var(--topbar-h) + 70px); }
 .day-group-head {
   display: flex;
   align-items: end;
@@ -1121,8 +1042,6 @@ button { margin: 0; background: none; cursor: pointer; }
 }
 .card-acts { display: flex; gap: 6px; flex: none; }
 .card-acts .icon-btn { height: 32px; min-width: 32px; padding: 0 8px; background: var(--surface); }
-
-@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
 /* Empty state ------------------------------------------------ */
 .empty {
@@ -1421,12 +1340,8 @@ button { margin: 0; background: none; cursor: pointer; }
    ============================================================ */
 
 @media (max-width: 1080px) {
-  .hero-grid { grid-template-columns: 1fr; gap: 26px; }
   .week-hero { grid-template-columns: 1fr; gap: 24px; }
   .week-glance { max-width: 680px; }
-  .aside-stack { flex-direction: row; flex-wrap: wrap; }
-  .wcard { flex: 1 1 260px; }
-  .glance { flex: 1 1 260px; }
 }
 
 @media (max-width: 760px) {
@@ -1434,19 +1349,17 @@ button { margin: 0; background: none; cursor: pointer; }
   .hero { padding: 26px 0 24px; }
   .week-title { font-size: clamp(38px, 12vw, 54px); }
   .week-lede { font-size: 16px; }
+  .intent-block .moods { flex-wrap: nowrap; overflow-x: auto; }
   .week-glance-head { align-items: flex-start; flex-direction: column; gap: 4px; }
   .week-stats div { padding-inline: 8px; }
   .week-stats b { font-size: 25px; }
   .week-stats span { font-size: 10px; }
-  .hero-sub { font-size: 15px; }
   .search { height: 50px; }
   .search input { font-size: 16px; }
   .wordmark-text span { display: none; }
   .topbar-weather { display: none; }
   /* The hero search and the My Day FAB already cover these on small screens. */
   .topbar-actions > .topbar-search, .topbar-actions > .topbar-myday { display: none; }
-  .aside-stack { flex-direction: column; }
-  .wcard, .glance { flex: none; width: 100%; }
   .topbar, .filterbar { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .section { padding-top: 28px; }
   .grid { grid-template-columns: 1fr; gap: 14px; }

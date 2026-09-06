@@ -19,10 +19,13 @@ Then open `http://localhost:3000`.
 
 ## How it works
 
-- `app/page.tsx` is the interactive events finder. It server-renders a safe
-  loading state, then refreshes itself from `/api/events` once mounted. If live
-  calendars fail, it falls back to the bundled snapshot (`app/events-data.ts`,
-  dated `SNAPSHOT_DATE`) with an explicit stale-data warning.
+- `app/page.tsx` is the interactive events finder. It opens on the whole week —
+  the list is grouped by day, and the day picker narrows it to one date — so the
+  first question it answers is "what should we do this week?" rather than "what
+  is on tonight?". It server-renders a safe loading state, then refreshes itself
+  from `/api/events` once mounted. If live calendars fail, it falls back to the
+  bundled snapshot (`app/events-data.ts`, dated `SNAPSHOT_DATE`) with an explicit
+  stale-data warning.
 - `/api/weather` validates and caches Orchard Park forecasts server-side. Event
   photos use Next.js image optimization directly; the optimizer's remote-host
   allowlist is shared with the server-side URL validator, so untrusted image
@@ -208,7 +211,8 @@ Three behaviours sit on top of whichever store is in use:
 - **Freshness in the payload.** `freshness.state` is `fresh`, `stale` or
   `last-good`, with `ageSeconds` and the `builtFor` date. The page reads it and
   says so: a `last-good` payload gets a banner naming the morning it was
-  collected, and a `stale` one marks the "Events updated" row as refreshing.
+  collected, and a `stale` one adds "refreshing now" to the updated time in the
+  week-at-a-glance panel.
 
 Fresh responses may sit in Vercel's CDN for fifteen minutes; partial responses
 use a two-minute edge window and degraded responses only one minute, so an
