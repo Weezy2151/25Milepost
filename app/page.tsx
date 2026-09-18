@@ -43,7 +43,7 @@ const MOODS: { id: Vibe; icon: string; label: string }[] = [
 ];
 
 /** Cards rendered per day in the week view before the reader asks for the rest. */
-const WEEK_PREVIEW_PER_DAY = 24;
+const WEEK_PREVIEW_PER_DAY = 6;
 
 const SAVED_KEY = "twenty-five-mile-post-clippings";
 const PLAN_KEY = "twenty-five-mile-post-myday";
@@ -57,6 +57,43 @@ function isFree(cost: string) {
 /** Rough drive time from Orchard Park — a mix of village roads and highway, ~32 mph average. */
 function driveMinutes(distance: number) {
   return Math.max(5, Math.round((distance / 32) * 60));
+}
+
+function eventStartMinutes(event: EventPick) {
+  const match = event.time.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)/i);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2] ?? 0);
+  const pm = match[3].toLowerCase() === "pm";
+  return ((pm ? (hour === 12 ? 12 : hour + 12) : hour === 12 ? 0 : hour) * 60) + minute;
+}
+
+function eventHasPassed(event: EventPick) {
+  if (!event.dateKey) return false;
+  const now = new Date();
+  const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(now);
+  if (event.dateKey < todayKey) return true;
+  if (event.dateKey > todayKey) return false;
+  const start = eventStartMinutes(event);
+  if (start === null || /all day|see listing|during/i.test(event.time)) return false;
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  return hour * 60 + minute >= start;
+}
+
+function eventTimingLabel(event: EventPick) {
+  if (!event.today) return event.day;
+  return eventHasPassed(event) ? "Earlier today" : "Today";
+}
+
+function recommendationReason(event: EventPick) {
+  const reasons = [];
+  if (isFree(event.cost)) reasons.push("Free");
+  if (event.audiences?.some((audience) => audience === "family" || audience === "kids" || audience === "toddler")) reasons.push("Family-friendly");
+  if (event.time && !/see listing|all day/i.test(event.time)) reasons.push("Time confirmed");
+  reasons.push(`${event.distance} mi away`);
+  return reasons.slice(0, 2).join(" · ");
 }
 
 function settingLabel(setting?: EventPick["setting"]) {
@@ -110,7 +147,7 @@ const EventCard = memo(function EventCard({
           </span>
         )}
         <span className="card-flags">
-          <span className={event.today ? "flag today" : "flag"}>{event.day}</span>
+          <span className={event.today ? "flag today" : "flag"}>{eventTimingLabel(event)}</span>
           <span className="flag" title={event.distancePrecision === "town" ? `Approximate — measured from the centre of ${event.town}` : undefined}>
             {event.distancePrecision === "town" || event.distancePrecision === "region" ? "~" : ""}
             {event.distance} mi · ~{driveMinutes(event.distance)} min
@@ -265,6 +302,9 @@ export default function Home() {
   const [sort, setSort] = useState<Sort>("recommended");
   const [query, setQuery] = useState("");
   const [showSaved, setShowSaved] = useState(false);
+  const [showUpcomingOnly, setShowUpcomingOnly] = useState(false);
+  const [showFreeOnly, setShowFreeOnly] = useState(false);
+  const hydratedRef = useRef(false);
 
   const [saved, setSaved] = useState<string[]>([]);
   const [planItems, setPlanItems] = useState<StoredPlanItem[]>([]);
@@ -286,6 +326,11 @@ export default function Home() {
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const plan = useMemo(() => planItems.flatMap((item) => eventById.get(item.id) ?? []), [planItems, eventById]);
   const unavailablePlan = useMemo(() => planItems.filter((item) => !eventById.has(item.id)), [planItems, eventById]);
+  const orderedPlanItems = useMemo(() => [...planItems].sort((a, b) => {
+    const aDate = eventById.get(a.id)?.dateKey ?? "9999-12-31";
+    const bDate = eventById.get(b.id)?.dateKey ?? "9999-12-31";
+    return aDate.localeCompare(bDate);
+  }), [planItems, eventById]);
   const planCount = planItems.length;
 
   /* ---- boot: local state, greeting, feeds ---- */
@@ -307,7 +352,22 @@ export default function Home() {
     } catch {
       /* storage unavailable — carry on with defaults */
     }
+    const params = new URLSearchParams(window.location.search);
+    const urlVibe = params.get("vibe") as Vibe | null;
+    const urlKind = params.get("kind") as EventKind | null;
+    const urlSetting = params.get("setting") as SettingFilter | null;
+    const urlSort = params.get("sort") as Sort | null;
+    if (urlVibe && MOODS.some((mood) => mood.id === urlVibe)) setVibe(urlVibe);
+    if (urlKind && KIND_OPTIONS.includes(urlKind)) setKind(urlKind);
+    if (urlSetting && ["all", "indoor", "outdoor"].includes(urlSetting)) setSetting(urlSetting);
+    if (urlSort && ["recommended", "closest"].includes(urlSort)) setSort(urlSort);
+    if (params.get("distance") && [5, 10, 15].includes(Number(params.get("distance")))) setMaxDistance(Number(params.get("distance")));
+    if (params.get("day")) setSelectedDay(params.get("day"));
+    if (params.get("q")) setQuery(params.get("q") ?? "");
+    if (params.get("upcoming") === "1") setShowUpcomingOnly(true);
+    if (params.get("free") === "1") setShowFreeOnly(true);
     setTheme(resolvedTheme);
+    hydratedRef.current = true;
 
     const controller = new AbortController();
 
@@ -349,6 +409,22 @@ export default function Home() {
     /* eslint-enable react-hooks/set-state-in-effect */
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    const params = new URLSearchParams();
+    if (selectedDay) params.set("day", selectedDay);
+    if (vibe !== "all") params.set("vibe", vibe);
+    if (kind !== "All activities") params.set("kind", kind);
+    if (setting !== "all") params.set("setting", setting);
+    if (maxDistance !== null) params.set("distance", String(maxDistance));
+    if (sort !== "recommended") params.set("sort", sort);
+    if (query.trim()) params.set("q", query.trim());
+    if (showUpcomingOnly) params.set("upcoming", "1");
+    if (showFreeOnly) params.set("free", "1");
+    const next = params.toString();
+    window.history.replaceState(null, "", next ? `${window.location.pathname}?${next}` : window.location.pathname);
+  }, [selectedDay, vibe, kind, setting, maxDistance, sort, query, showUpcomingOnly, showFreeOnly]);
 
   useEffect(() => {
     if (theme) document.documentElement.setAttribute("data-theme", theme);
@@ -422,6 +498,8 @@ export default function Home() {
         if (eventSetting !== setting && eventSetting !== "both") continue;
       }
       if (maxDistance !== null && event.distance > maxDistance) continue;
+      if (showUpcomingOnly && eventHasPassed(event)) continue;
+      if (showFreeOnly && !isFree(event.cost)) continue;
       if (!matchesVibe(event, vibe, text)) continue;
       if (showSaved && !savedSet.has(event.id)) continue;
       if (needle && !text.includes(needle)) continue;
@@ -430,8 +508,8 @@ export default function Home() {
       list.push(event);
     }
     if (sort === "closest") return [...list].sort((a, b) => a.distance - b.distance);
-    return list;
-  }, [searchableEvents, kind, setting, maxDistance, vibe, showSaved, savedSet, deferredQuery, sort, matchesVibe]);
+    return [...list].sort((a, b) => Number(eventHasPassed(a)) - Number(eventHasPassed(b)) || (b.priority ?? 0) - (a.priority ?? 0));
+  }, [searchableEvents, kind, setting, maxDistance, vibe, showSaved, showUpcomingOnly, showFreeOnly, savedSet, deferredQuery, sort, matchesVibe]);
 
   /** The week's days in order, one tile per distinct date the current event set covers. */
   const days = useMemo(() => {
@@ -474,7 +552,14 @@ export default function Home() {
   })).filter((day) => day.events.length > 0), [days, filtered]);
 
   const spotlight = useMemo(
-    () => [...baseFiltered].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3),
+    () => [...baseFiltered].sort((a, b) => {
+      const score = (event: EventPick) => (event.priority ?? 0) * 10
+        + (event.time && !/see listing|all day/i.test(event.time) ? 8 : 0)
+        + (event.cost && !/see listing|varies/i.test(event.cost) ? 5 : 0)
+        + (event.audiences?.some((audience) => audience === "family" || audience === "kids" || audience === "toddler") ? 4 : 0)
+        - (eventHasPassed(event) ? 20 : 0);
+      return score(b) - score(a);
+    }).slice(0, 3),
     [baseFiltered],
   );
 
@@ -487,9 +572,11 @@ export default function Home() {
     if (setting !== "all") list.push({ key: "setting", label: setting === "indoor" ? "Indoor" : "Outdoor", clear: () => setSetting("all") });
     if (maxDistance !== null) list.push({ key: "distance", label: `Within ${maxDistance} mi`, clear: () => setMaxDistance(null) });
     if (showSaved) list.push({ key: "saved", label: "Saved only", clear: () => setShowSaved(false) });
+    if (showUpcomingOnly) list.push({ key: "upcoming", label: "Upcoming only", clear: () => setShowUpcomingOnly(false) });
+    if (showFreeOnly) list.push({ key: "free", label: "Free only", clear: () => setShowFreeOnly(false) });
     if (query.trim()) list.push({ key: "query", label: `“${query.trim()}”`, clear: () => setQuery("") });
     return list;
-  }, [vibe, kind, setting, maxDistance, showSaved, query]);
+  }, [vibe, kind, setting, maxDistance, showSaved, showUpcomingOnly, showFreeOnly, query]);
 
   const clearAll = () => {
     setVibe("all");
@@ -497,6 +584,8 @@ export default function Home() {
     setSetting("all");
     setMaxDistance(null);
     setShowSaved(false);
+    setShowUpcomingOnly(false);
+    setShowFreeOnly(false);
     setQuery("");
   };
 
@@ -578,7 +667,7 @@ export default function Home() {
   const copyItinerary = async () => {
     const text = planItems.map((item, index) => {
       const stop = eventById.get(item.id);
-      return stop ? `${index + 1}. ${stop.title} (${stop.time}) — ${stop.venue}, ${stop.town}` : `${index + 1}. ${item.title} — no longer in current listings`;
+      return stop ? `${index + 1}. ${stop.date} · ${stop.title} (${stop.time}) — ${stop.venue}, ${stop.town}` : `${index + 1}. ${item.title} — no longer in current listings`;
     }).join("\n");
     try {
       await navigator.clipboard.writeText(`My Day · The 25-Mile Post\n\n${text}`);
@@ -620,7 +709,7 @@ export default function Home() {
 
       {/* Filtering is instant and silent for sighted users; announce it for the rest. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {`${filtered.length} ${filtered.length === 1 ? "event" : "events"} match your filters ${activeDay ? "for the selected day" : "this week"}, ${todayCount} today.`}
+        {loading ? "Loading this week's events." : `${filtered.length} ${filtered.length === 1 ? "event" : "events"} match your filters ${activeDay ? "for the selected day" : "this week"}, ${todayCount} today.`}
       </p>
 
       <header className="topbar" data-modal-background>
@@ -724,7 +813,9 @@ export default function Home() {
               </div>
               <div className="week-stats">
                 <div><b>{baseFiltered.length}</b><span>things to do</span></div>
-                <div><b>{freeThisWeek}</b><span>free picks</span></div>
+                <button type="button" className={showFreeOnly ? "week-stat-button on" : "week-stat-button"} aria-pressed={showFreeOnly} onClick={() => setShowFreeOnly(!showFreeOnly)}>
+                  <b>{freeThisWeek}</b><span>free picks</span>
+                </button>
                 <div><b>{closeThisWeek}</b><span>within 5 miles</span></div>
               </div>
               <p>
@@ -899,6 +990,24 @@ export default function Home() {
               Saved
               <b>{saved.length}</b>
             </button>
+            <button
+              type="button"
+              className={showUpcomingOnly ? "fmenu-btn on" : "fmenu-btn"}
+              aria-pressed={showUpcomingOnly}
+              onClick={() => setShowUpcomingOnly(!showUpcomingOnly)}
+              title="Hide events that have already started today"
+            >
+              <IconClock />
+              Upcoming
+            </button>
+            <button
+              type="button"
+              className={showFreeOnly ? "fmenu-btn on" : "fmenu-btn"}
+              aria-pressed={showFreeOnly}
+              onClick={() => setShowFreeOnly(!showFreeOnly)}
+            >
+              Free
+            </button>
             <div className="filters-desktop">
               <FilterMenu
                 label="Sort"
@@ -953,6 +1062,7 @@ export default function Home() {
                   </span>
                   <h3>{event.title}</h3>
                   <p className="spot-when">{event.day} · {event.date} · {event.time}</p>
+                  <p className="spot-reason">{recommendationReason(event)}</p>
                   <p>{event.description}</p>
                   <span className="spot-foot">
                     <span>
@@ -978,11 +1088,15 @@ export default function Home() {
               </h2>
             </div>
             <p className="count">
-              {filtered.length} {filtered.length === 1 ? "event" : "events"}
+              {loading ? "Loading…" : `${filtered.length} ${filtered.length === 1 ? "event" : "events"}`}
             </p>
           </div>
 
-          {filtered.length ? (
+          {loading ? (
+            <div className="loading-grid" role="status" aria-live="polite" aria-label="Loading events">
+              {Array.from({ length: 6 }, (_, index) => <div className="loading-card" key={index} />)}
+            </div>
+          ) : filtered.length ? (
             activeDay === null ? (
               <div className="week-list">
                 {filteredByDay.map((day) => {
@@ -1065,7 +1179,7 @@ export default function Home() {
           <details className="sources">
             <summary>
               <IconChevron />
-              Where we look · {FETCHED_SOURCES.length} live feeds
+              Where we look · {FETCHED_SOURCES.length} local sources · 17 calendar feeds
               <span className="rule" />
             </summary>
             <div className="source-grid">
@@ -1176,7 +1290,7 @@ export default function Home() {
                   {selected.url && (
                     <a className="btn-ghost" href={selected.url} target="_blank" rel="noreferrer">
                       <IconTicket style={{ width: 15, height: 15 }} />
-                      {selected.source}
+                      Event details
                       <IconExternal style={{ width: 13, height: 13 }} />
                     </a>
                   )}
@@ -1233,30 +1347,35 @@ export default function Home() {
                 ) : (
                   <>
                     <div className="itin">
-                      {planItems.map((item, index) => {
+                      {orderedPlanItems.map((item, index) => {
                         const stop = eventById.get(item.id);
+                        const previous = index > 0 ? eventById.get(orderedPlanItems[index - 1].id) : null;
+                        const dateChanged = stop && (!previous || previous.dateKey !== stop.dateKey);
                         return (
-                        <div className="itin-row" key={item.id}>
-                          <div className="itin-rail">
-                            <span className="itin-num">{index + 1}</span>
-                            <span className="itin-line" />
-                          </div>
-                          <div className={stop ? "itin-card" : "itin-card unavailable"}>
-                            <div style={{ minWidth: 0 }}>
-                              <span className="itin-time">{stop?.time ?? "Unavailable"}</span>
-                              <h4>{stop?.title ?? item.title}</h4>
-                              <p>
-                                {stop ? `${stop.venue} · ${stop.town} — ${stop.distance} mi` : "This event is no longer in the current listings."}
-                              </p>
+                        <div key={item.id}>
+                          {dateChanged && <p className="itin-day">{stop.day} · {stop.date}</p>}
+                          <div className="itin-row">
+                            <div className="itin-rail">
+                              <span className="itin-num">{index + 1}</span>
+                              <span className="itin-line" />
                             </div>
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={() => removePlanItem(item.id, stop?.title ?? item.title)}
-                              aria-label={`Remove ${stop?.title ?? item.title} from My Day`}
-                            >
-                              <IconX />
-                            </button>
+                            <div className={stop ? "itin-card" : "itin-card unavailable"}>
+                              <div style={{ minWidth: 0 }}>
+                                <span className="itin-time">{stop?.time ?? "Unavailable"}</span>
+                                <h4>{stop?.title ?? item.title}</h4>
+                                <p>
+                                  {stop ? `${stop.venue} · ${stop.town} — ${stop.distance} mi` : "This event is no longer in the current listings."}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                onClick={() => removePlanItem(item.id, stop?.title ?? item.title)}
+                                aria-label={`Remove ${stop?.title ?? item.title} from My Day`}
+                              >
+                                <IconX />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );})}
@@ -1348,6 +1467,24 @@ export default function Home() {
                       {option === "recommended" ? "Recommended" : "Closest first"}
                     </button>
                   ))}
+                </div>
+              </div>
+
+              <div className="sheet-group">
+                <h4>Timing</h4>
+                <div className="sheet-chips">
+                  <button type="button" aria-pressed={showUpcomingOnly} onClick={() => setShowUpcomingOnly(!showUpcomingOnly)}>
+                    {showUpcomingOnly ? "Upcoming only" : "Include earlier today"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="sheet-group">
+                <h4>Cost</h4>
+                <div className="sheet-chips">
+                  <button type="button" aria-pressed={showFreeOnly} onClick={() => setShowFreeOnly(!showFreeOnly)}>
+                    {showFreeOnly ? "Free only" : "Any price"}
+                  </button>
                 </div>
               </div>
             </div>

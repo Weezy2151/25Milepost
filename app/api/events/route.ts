@@ -271,7 +271,7 @@ const KIND_RULES: Array<[RegExp, EventKind]> = [
   [/concert|live music|music series|jazz|bandstand|orchestra|symphony|open mic|acoustic|\bband\b|karaoke/, "Live music"],
   [/museum|zoo|dinosaur|shakespeare|theater|theatre|movie|film|tour\b|history|gallery|exhibit/, "Museums & culture"],
   [/farmers? market|farm market|\bmarket\b|food truck|tasting|taste of|brewery|brewing|\bbeer\b|cider|winery|\bwine\b|urban farm|harvest|chili cook|bbq|barbecue/, "Markets & food"],
-  [/baseball|bisons|buffalo bills|football|sport|fitness|yoga|pickleball|bocce|\bbike\b|\brun\b|\b5k\b/, "Sports & active"],
+  [/baseball|bisons|buffalo bills|football|\bsports?\b|fitness|yoga|pickleball|bocce|\bbike\b|\brun\b|\b5k\b/, "Sports & active"],
   [/park\b|nature|hike|outdoor|beach|garden|wildlife|trail|soap making/, "Outdoors"],
   [/trivia|quiz night|bingo|game night|comedy/, "Community"],
   [/library|libcal|b&ecpl/, "Library"],
@@ -298,6 +298,7 @@ function classify(title: string, description: string, source: string): EventKind
 function inferSetting(title: string, description: string, venue: string, tags: string[], kind: EventKind): EventSetting {
   const text = `${title} ${description} ${venue} ${tags.join(" ")} ${kind}`.toLowerCase();
   if (/fairgrounds|depot|brewery|pavilion|museum & grounds|zoo/i.test(text)) return "both";
+  if (/walking tour|neighborhood tour|exterior tour|outdoor tour|\bhike\b|\btrail\b|parade|waterfront|canalside/i.test(text)) return "outdoor";
   if (/library|museum|indoor|escape|play cafe|theatre|storytime|microscope|board game|lego|tinkering|sensory/i.test(text)) return "indoor";
   if (/park|outdoor|market|farmers market|hike|trail|stadium|lawn|garden|beach|waterfront|parade|picnic|canalside|bubble day|running|bike|sports|tractor pull/i.test(text)) return "outdoor";
   if (kind === "Library" || kind === "Museums & culture") return "indoor";
